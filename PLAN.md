@@ -32,9 +32,9 @@ Status key: `[x]` done · `[~]` partially done / see notes · `[ ]` not started
 
 ## Phase 3: Live level metering
 - [x] Metering engine: background capture thread per monitored input, lock-free level hand-off
-- [~] macOS + Windows capture via `cpal` (macOS capture blocked locally on the mic permission prompt (see notes))
+- [x] macOS + Windows capture via `cpal` (verified on CI runners: CoreAudio and WASAPI streams deliver audio; locally the Mac needs mic permission granted)
 - [x] Linux capture via PulseAudio (record stream from the specific source) (via cpal's PulseAudio host; CI measures a 0.5-amplitude tone at exactly -6.0 dBFS)
-- [~] Windows output meters via `IAudioMeterInformation` (implemented, not verified on real hardware)
+- [x] Windows output meters via `IAudioMeterInformation` (verified on a Windows runner)
 
 ## Phase 4: CLI (scriptable, also used for headless CI smoke tests)
 - [x] `audio-interface list` (table or `--json`)
@@ -60,7 +60,7 @@ Status key: `[x]` done · `[~]` partially done / see notes · `[ ]` not started
 - [x] GitHub Actions: build + clippy + tests on ubuntu, windows, macos
 - [x] Linux smoke test against a real PulseAudio server with a null sink (list, set-default, volume)
 - [x] Windows and macOS smoke test of the CLI (real devices: VB-CABLE on Windows, Background Music on macOS)
-- [x] Release workflow: tagged builds upload binaries for all 3 OSes
+- [~] Release workflow: tagged builds upload binaries for all 3 OSes (written, not run yet: no tag pushed, publishing a release is left for the owner to decide)
 
 ## Phase 8: Polish (stretch)
 - [x] 30 s level history graph + typical-level readout (gain drift at a glance)
@@ -96,3 +96,6 @@ Status key: `[x]` done · `[~]` partially done / see notes · `[ ]` not started
   privacy turned off. The app now explains this error and links to the privacy settings, and
   CI grants access through the registry before the meter test. Fixed a gain-lock loop on
   devices with stepped volume.
+- **00:15** All six CI jobs are green. Windows WASAPI capture works once mic consent is granted
+  (303 blocks, digital silence correctly detected), and the native output meter works. macOS runner
+  capture works (286 blocks). Every backend and capture path is verified on all three OSes.
