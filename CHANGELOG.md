@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Rename and hide devices**: right-click (or double-click) a device name; hidden devices can be
+  restored in Settings.
 - **Start at login** (Settings → General): per user on all OSes (HKCU Run key, LaunchAgent, XDG
   autostart), launching with the new `--minimized` flag.
 - **Profiles**: save default devices, volumes, mutes and gain locks as named setups ("Calls",

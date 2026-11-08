@@ -48,6 +48,27 @@ pub struct Settings {
     pub recordings_dir: Option<std::path::PathBuf>,
     /// Saved profiles (presets).
     pub profiles: Vec<crate::profiles::Profile>,
+    /// User-chosen display names for devices.
+    pub aliases: Vec<DeviceAlias>,
+    /// Devices hidden from the list.
+    pub hidden: Vec<HiddenDevice>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DeviceAlias {
+    pub device: DeviceRef,
+    pub direction: Direction,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HiddenDevice {
+    pub device: DeviceRef,
+    pub direction: Direction,
+}
+
+fn same(r: &DeviceRef, d: &crate::model::Device) -> bool {
+    r.id == d.id || r.name == d.name
 }
 
 impl Default for Settings {
@@ -66,6 +87,8 @@ impl Default for Settings {
             record_audio: false,
             recordings_dir: None,
             profiles: Vec::new(),
+            aliases: Vec::new(),
+            hidden: Vec::new(),
         }
     }
 }
@@ -100,6 +123,35 @@ impl Settings {
         std::fs::write(&tmp, serde_json::to_string_pretty(self)?)?;
         std::fs::rename(&tmp, path)?;
         Ok(())
+    }
+
+    /// Display name: the user's alias if set, else the OS name.
+    pub fn display_name<'a>(&'a self, d: &'a crate::model::Device) -> &'a str {
+        self.aliases
+            .iter()
+            .find(|a| a.direction == d.direction && same(&a.device, d))
+            .map(|a| a.name.as_str())
+            .unwrap_or(&d.name)
+    }
+
+    /// Set (or with an empty name, clear) a device alias.
+    pub fn set_alias(&mut self, d: &crate::model::Device, name: &str) {
+        self.aliases.retain(|a| !(a.direction == d.direction && same(&a.device, d)));
+        let name = name.trim();
+        if !name.is_empty() && name != d.name {
+            self.aliases.push(DeviceAlias { device: DeviceRef::of(d), direction: d.direction, name: name.to_string() });
+        }
+    }
+
+    pub fn is_hidden(&self, d: &crate::model::Device) -> bool {
+        self.hidden.iter().any(|h| h.direction == d.direction && same(&h.device, d))
+    }
+
+    pub fn set_hidden(&mut self, d: &crate::model::Device, hide: bool) {
+        self.hidden.retain(|h| !(h.direction == d.direction && same(&h.device, d)));
+        if hide {
+            self.hidden.push(HiddenDevice { device: DeviceRef::of(d), direction: d.direction });
+        }
     }
 
     pub fn recordings_dir(&self) -> std::path::PathBuf {
@@ -216,6 +268,24 @@ mod tests {
         s.toggle_preferred(r("other-id", "C"), Direction::Output); // removes by name
         let ids: Vec<_> = s.preferred_outputs.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, ["a", "b"]);
+    }
+
+    #[test]
+    fn aliases_and_hidden_devices() {
+        let mut s = Settings::default();
+        let d = crate::model::test_device("x", "Headset (WH-1000XM4 Hands-Free AG Audio)", Direction::Input);
+        assert_eq!(s.display_name(&d), d.name);
+        s.set_alias(&d, "  Headset mic ");
+        assert_eq!(s.display_name(&d), "Headset mic");
+        s.set_alias(&d, "");
+        assert_eq!(s.display_name(&d), d.name, "empty name clears the alias");
+        assert!(!s.is_hidden(&d));
+        s.set_hidden(&d, true);
+        s.set_hidden(&d, true);
+        assert!(s.is_hidden(&d));
+        assert_eq!(s.hidden.len(), 1);
+        s.set_hidden(&d, false);
+        assert!(!s.is_hidden(&d));
     }
 
     #[test]

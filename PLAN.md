@@ -96,7 +96,7 @@ pavucontrol (Linux). Ordered by value. Platform limits are noted where an OS has
 - [ ] 11.4 Desktop notifications: device lost, gain changed by an app, signal lost, call recording saved
 - [x] 11.5 Start at login (per user: Windows HKCU Run, macOS LaunchAgent, Linux autostart)
 - [ ] 11.6 Separate "communications" default (Windows has a separate default for calls)
-- [ ] 11.7 Custom device names and hiding devices
+- [x] 11.7 Custom device names and hiding devices
 - [ ] 11.8 Per-app volume and mute mixer (Windows sessions, PulseAudio streams; macOS has no public API, so it's shown read-only)
 
 **Diagnostics & testing**

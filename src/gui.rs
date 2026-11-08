@@ -87,6 +87,8 @@ struct App {
     new_profile_name: String,
     start_minimized: bool,
     autostart: Option<bool>,
+    /// Device being renamed and the text typed so far.
+    renaming: Option<(DeviceKey, String)>,
 }
 
 const GREEN: Color32 = Color32::from_rgb(0x3f, 0xb9, 0x50);
@@ -114,6 +116,7 @@ impl App {
             new_profile_name: String::new(),
             start_minimized: false,
             autostart: None,
+            renaming: None,
             recordings_panel: RecordingsPanel {
                 open: std::env::var("AUDIO_INTERFACE_OPEN").is_ok_and(|v| v == "recordings"),
                 ..RecordingsPanel::default()
@@ -297,6 +300,7 @@ impl App {
                 .filter(|d| {
                     !(self.settings.hide_virtual && matches!(d.transport, Transport::Virtual | Transport::Aggregate))
                 })
+                .filter(|d| !self.settings.is_hidden(d))
                 .cloned()
                 .collect()
         };
@@ -344,7 +348,54 @@ impl App {
 
             // Header: name, badges, "make default".
             ui.horizontal(|ui| {
-                ui.label(RichText::new(&d.name).strong().size(15.0));
+                match &mut self.renaming {
+                    Some((k, text)) if *k == key => {
+                        let resp = ui.add(egui::TextEdit::singleline(text).desired_width(200.0));
+                        resp.request_focus();
+                        let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        if enter || ui.small_button("✔").clicked() {
+                            let name = text.clone();
+                            self.settings.set_alias(d, &name);
+                            self.renaming = None;
+                            self.settings_changed();
+                        } else if ui.small_button("✕").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            self.renaming = None;
+                        }
+                    }
+                    _ => {
+                        let shown = self.settings.display_name(d).to_string();
+                        let resp = ui
+                            .add(egui::Label::new(RichText::new(&shown).strong().size(15.0)).sense(Sense::click()))
+                            .on_hover_text(if shown != d.name {
+                                format!("{}\n(right-click to rename or hide)", d.name)
+                            } else {
+                                "Right-click to rename or hide".to_string()
+                            });
+                        if resp.double_clicked() {
+                            self.renaming = Some((key.clone(), shown.clone()));
+                        }
+                        resp.context_menu(|ui| {
+                            if ui.button("✏ Rename…").clicked() {
+                                self.renaming = Some((key.clone(), shown.clone()));
+                                ui.close();
+                            }
+                            if shown != d.name && ui.button("↺ Use original name").clicked() {
+                                self.settings.set_alias(d, "");
+                                self.settings_changed();
+                                ui.close();
+                            }
+                            if ui.button("🙈 Hide this device").clicked() {
+                                self.settings.set_hidden(d, true);
+                                self.settings_changed();
+                                ui.close();
+                            }
+                            if ui.button("📋 Copy device ID").clicked() {
+                                ui.ctx().copy_text(d.id.clone());
+                                ui.close();
+                            }
+                        });
+                    }
+                }
                 if d.is_default {
                     ui.label(RichText::new("DEFAULT").small().strong().color(GREEN));
                 }
@@ -643,6 +694,22 @@ impl App {
                         }
                     });
                 }
+            }
+
+            ui.separator();
+            ui.heading("Hidden devices");
+            let hidden = self.settings.hidden.clone();
+            if hidden.is_empty() {
+                ui.label(RichText::new("None. Right-click a device name to hide it.").small().color(MUTED_TEXT));
+            }
+            for h in hidden {
+                ui.horizontal(|ui| {
+                    ui.label(format!("{} ({})", h.device.name, h.direction));
+                    if ui.small_button("Show").clicked() {
+                        self.settings.hidden.retain(|x| x != &h);
+                        changed = true;
+                    }
+                });
             }
 
             ui.separator();
