@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Start at login** (Settings → General): per user on all OSes (HKCU Run key, LaunchAgent, XDG
+  autostart), launching with the new `--minimized` flag.
 - **Profiles**: save default devices, volumes, mutes and gain locks as named setups ("Calls",
   "Music") and switch in one click (top-bar menu) or with `audio-interface profile apply <name>`.
 - **Session recording**: ⏺ Record on any device logs level (peak and exact RMS), OS gain, mute,

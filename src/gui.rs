@@ -22,7 +22,14 @@ pub const SCREENSHOT_ENV: &str = "AUDIO_INTERFACE_SCREENSHOT";
 /// Frames to render before capturing, so meters and layout settle.
 const SCREENSHOT_AFTER_FRAMES: u64 = 60;
 
-pub fn run(service: Service, settings: Settings, settings_path: Option<PathBuf>) -> eframe::Result {
+/// Start options for the window.
+#[derive(Default, Clone, Copy)]
+pub struct GuiOptions {
+    /// Start minimized (used by "start at login").
+    pub minimized: bool,
+}
+
+pub fn run(service: Service, settings: Settings, settings_path: Option<PathBuf>, opts: GuiOptions) -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Audio Interface")
@@ -34,7 +41,14 @@ pub fn run(service: Service, settings: Settings, settings_path: Option<PathBuf>)
     eframe::run_native(
         "Audio Interface",
         options,
-        Box::new(move |_cc| Ok(Box::new(App::new(service, settings, settings_path)))),
+        Box::new(move |_cc| {
+            let mut app = App::new(service, settings, settings_path);
+            app.start_minimized = opts.minimized;
+            if opts.minimized {
+                app.splash = crate::splash::Splash::skipped();
+            }
+            Ok(Box::new(app))
+        }),
     )
 }
 
@@ -71,6 +85,8 @@ struct App {
     recordings_panel: RecordingsPanel,
     splash: crate::splash::Splash,
     new_profile_name: String,
+    start_minimized: bool,
+    autostart: Option<bool>,
 }
 
 const GREEN: Color32 = Color32::from_rgb(0x3f, 0xb9, 0x50);
@@ -96,6 +112,8 @@ impl App {
             frame_count: 0,
             splash: crate::splash::Splash::new(),
             new_profile_name: String::new(),
+            start_minimized: false,
+            autostart: None,
             recordings_panel: RecordingsPanel {
                 open: std::env::var("AUDIO_INTERFACE_OPEN").is_ok_and(|v| v == "recordings"),
                 ..RecordingsPanel::default()
@@ -566,6 +584,19 @@ impl App {
         let mut open = self.show_settings;
         let mut changed = false;
         egui::Window::new("Settings").open(&mut open).resizable(true).default_width(420.0).show(ctx, |ui| {
+            ui.heading("General");
+            let mut on = *self.autostart.get_or_insert_with(crate::autostart::is_enabled);
+            if ui
+                .checkbox(&mut on, "Start at login (minimized)")
+                .on_hover_text("Per user, no admin rights needed")
+                .changed()
+            {
+                match crate::autostart::set_enabled(on) {
+                    Ok(()) => self.autostart = Some(on),
+                    Err(e) => log::error!("start at login: {e:#}"),
+                }
+            }
+            ui.separator();
             ui.heading("Metering");
             changed |=
                 ui.checkbox(&mut self.settings.monitor_default_input, "Always meter the default input").changed();
@@ -667,6 +698,9 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.pull();
         let ctx = ui.ctx().clone();
+        if self.start_minimized && self.frame_count == 1 {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
 
         egui::Panel::top("top").show(ui, |ui| {
             ui.add_space(4.0);

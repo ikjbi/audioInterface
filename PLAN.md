@@ -83,7 +83,7 @@ Goal: find out if levels or gain drop halfway through a Teams call, and why.
 - [x] Detect which other apps are using each device (macOS process objects, Windows audio sessions, PulseAudio source outputs)
 - [x] Show "in use by Teams" in the GUI and CLI
 - [x] Auto-record: start recording when another app starts using a chosen device (a call starts), stop when the call ends
-- [~] CI: Linux test records a test tone, analyzes it, and detects a `parecord` client as "in use" (in-use + auto-record passed; level assertion re-running after the RMS fix)
+- [x] CI: Linux test records a test tone, analyzes it, and detects a `parecord` client as "in use"
 
 ## Phase 11: Professional feature set
 Benchmarked against SoundSource (macOS), EarTrumpet / SoundSwitch / Voicemeeter (Windows) and
@@ -94,7 +94,7 @@ pavucontrol (Linux). Ordered by value. Platform limits are noted where an OS has
 - [ ] 11.2 Global hotkeys: toggle mic mute anywhere (push-to-mute), cycle output device
 - [ ] 11.3 System tray / menu-bar icon: quick device switch, mic mute, recording status
 - [ ] 11.4 Desktop notifications: device lost, gain changed by an app, signal lost, call recording saved
-- [ ] 11.5 Start at login (per user: Windows HKCU Run, macOS LaunchAgent, Linux autostart)
+- [x] 11.5 Start at login (per user: Windows HKCU Run, macOS LaunchAgent, Linux autostart)
 - [ ] 11.6 Separate "communications" default (Windows has a separate default for calls)
 - [ ] 11.7 Custom device names and hiding devices
 - [ ] 11.8 Per-app volume and mute mixer (Windows sessions, PulseAudio streams; macOS has no public API, so it's shown read-only)

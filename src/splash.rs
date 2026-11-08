@@ -30,6 +30,11 @@ impl Splash {
         }
     }
 
+    /// A splash that is already finished (e.g. when starting minimized).
+    pub fn skipped() -> Self {
+        Splash { done: true, ..Self::new() }
+    }
+
     pub fn is_done(&self) -> bool {
         self.done
     }

@@ -22,6 +22,10 @@ struct Cli {
     #[arg(long, global = true, env = "AUDIO_INTERFACE_MOCK")]
     mock: bool,
 
+    /// Start the app minimized (used by "start at login").
+    #[arg(long)]
+    minimized: bool,
+
     /// Use this settings file instead of the default one in the OS config directory.
     #[arg(long, global = true, env = "AUDIO_INTERFACE_SETTINGS", value_name = "PATH")]
     settings: Option<std::path::PathBuf>,
@@ -185,7 +189,8 @@ fn run(cli: Cli) -> Result<()> {
             let settings = path.as_deref().map(Settings::load).unwrap_or_default();
             let factory = make_factory(mock);
             let service = Service::start(settings.clone(), factory);
-            audio_interface::gui::run(service, settings, path).map_err(|e| anyhow::anyhow!("GUI error: {e}"))
+            let opts = audio_interface::gui::GuiOptions { minimized: cli.minimized };
+            audio_interface::gui::run(service, settings, path, opts).map_err(|e| anyhow::anyhow!("GUI error: {e}"))
         }
         Cmd::List { json, direction } => {
             let mut b = make_backend(mock)?;
