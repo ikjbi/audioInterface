@@ -11,6 +11,7 @@ pub mod analysis;
 pub mod backend;
 pub mod bluetooth;
 pub mod gui;
+pub mod gui_recordings;
 pub mod icon;
 pub mod levels;
 pub mod meter;

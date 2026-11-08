@@ -4,9 +4,10 @@
 //! snapshot, drains level cells into meter ballistics, and turns clicks into
 //! [`Request`]s. Nothing in here blocks on the OS.
 
+use crate::gui_recordings::RecordingsPanel;
 use crate::levels::{LevelHistory, MeterState, SignalStatus, meter_position, to_db};
 use crate::model::{Device, DeviceKey, DeviceRef, Direction, Transport};
-use crate::service::{Event, EventKind, Request, Service};
+use crate::service::{ActiveRecording, Event, EventKind, FinishedRecording, Request, Service};
 use crate::settings::Settings;
 use eframe::egui::{self, Color32, RichText, Sense, Stroke, Vec2};
 use std::collections::{BTreeSet, HashMap};
@@ -19,7 +20,7 @@ use std::time::{Duration, Instant, SystemTime};
 /// and exit. Used for docs and for visual checks in CI.
 pub const SCREENSHOT_ENV: &str = "AUDIO_INTERFACE_SCREENSHOT";
 /// Frames to render before capturing, so meters and layout settle.
-const SCREENSHOT_AFTER_FRAMES: u64 = 300;
+const SCREENSHOT_AFTER_FRAMES: u64 = 120;
 
 pub fn run(service: Service, settings: Settings, settings_path: Option<PathBuf>) -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -48,6 +49,8 @@ struct View {
     meter_errors: HashMap<DeviceKey, String>,
     monitored: BTreeSet<DeviceKey>,
     native_metered: BTreeSet<DeviceKey>,
+    recordings: Vec<ActiveRecording>,
+    finished: Vec<FinishedRecording>,
 }
 
 struct App {
@@ -65,6 +68,7 @@ struct App {
     view: View,
     frame_count: u64,
     screenshot: Option<(PathBuf, Arc<AtomicBool>)>,
+    recordings_panel: RecordingsPanel,
 }
 
 const GREEN: Color32 = Color32::from_rgb(0x3f, 0xb9, 0x50);
@@ -88,6 +92,10 @@ impl App {
             show_log: true,
             view: View::default(),
             frame_count: 0,
+            recordings_panel: RecordingsPanel {
+                open: std::env::var("AUDIO_INTERFACE_OPEN").is_ok_and(|v| v == "recordings"),
+                ..RecordingsPanel::default()
+            },
             screenshot: std::env::var_os(SCREENSHOT_ENV).map(|p| (PathBuf::from(p), Arc::new(AtomicBool::new(false)))),
         }
     }
@@ -143,6 +151,8 @@ impl App {
             meter_errors: snap.meter_errors.clone(),
             monitored: snap.monitored.clone(),
             native_metered: snap.native_metered.clone(),
+            recordings: snap.recordings.clone(),
+            finished: snap.finished.iter().cloned().collect(),
         };
         let readings: Vec<_> = snap.levels.iter().map(|(k, c)| (k.clone(), c.take())).collect();
         drop(snap);
@@ -168,6 +178,19 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("⚙ Settings").clicked() {
                     self.show_settings = !self.show_settings;
+                }
+                let n = self.view.recordings.len();
+                let rec_label = if n > 0 {
+                    RichText::new(format!("⏺ Recording ({n})")).color(RED)
+                } else {
+                    RichText::new("⏺ Recordings")
+                };
+                if ui
+                    .selectable_label(self.recordings_panel.open, rec_label)
+                    .on_hover_text("Session logs and drop analysis, auto-record calls")
+                    .clicked()
+                {
+                    self.recordings_panel.open = !self.recordings_panel.open;
                 }
                 if ui.button("⟳ Refresh").clicked() {
                     self.service.send(Request::Refresh);
@@ -246,6 +269,11 @@ impl App {
                 ui.label(RichText::new(&d.name).strong().size(15.0));
                 if d.is_default {
                     ui.label(RichText::new("DEFAULT").small().strong().color(GREEN));
+                }
+                if !d.in_use_by.is_empty() {
+                    let verb = if d.direction == Direction::Input { "recording" } else { "playing" };
+                    ui.label(RichText::new(format!("● {}", d.in_use_by.join(", "))).small().color(BLUE))
+                        .on_hover_text(format!("{} {verb} on this device right now", d.in_use_by.join(", ")));
                 }
                 if let Some(rank) = self.settings.preferred(d.direction).iter().position(|r| r.id == d.id || r.name == d.name) {
                     ui.label(RichText::new(format!("★{}", rank + 1)).small().color(YELLOW))
@@ -339,6 +367,33 @@ impl App {
                 {
                     self.settings.toggle_preferred(DeviceRef::of(d), d.direction);
                     self.settings_changed();
+                }
+                // Session recording.
+                let recording = self.view.recordings.iter().find(|r| r.info.key == key);
+                match recording {
+                    Some(r) => {
+                        ui.label(
+                            RichText::new(format!("⏺ REC {}", crate::analysis::fmt_duration(r.elapsed_s))).color(RED).strong(),
+                        );
+                        if ui.button("■ Stop").on_hover_text("Stop and analyze the recording").clicked() {
+                            self.service.send(Request::StopRecording(key.clone()));
+                            self.recordings_panel.open = true;
+                        }
+                    }
+                    None => {
+                        let audio = self.settings.record_audio;
+                        if ui
+                            .button("⏺ Record")
+                            .on_hover_text(format!(
+                                "Log level, OS gain and signal health once per second{}, then get a report on \
+                                 whether and why the level dropped.",
+                                if audio { " plus the audio" } else { "" }
+                            ))
+                            .clicked()
+                        {
+                            self.service.send(Request::StartRecording { key: key.clone(), audio });
+                        }
+                    }
                 }
             });
         });
@@ -581,6 +636,18 @@ impl eframe::App for App {
 
         if self.show_settings {
             self.settings_window(&ctx);
+        }
+        if self.recordings_panel.open {
+            let changed = self.recordings_panel.show(
+                &ctx,
+                &mut self.settings,
+                &self.service,
+                &self.view.recordings,
+                &self.view.finished,
+            );
+            if changed {
+                self.settings_changed();
+            }
         }
         self.save_settings_if_needed();
         self.frame_count += 1;
