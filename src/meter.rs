@@ -333,6 +333,7 @@ where
     let tap = tap.clone();
     let window = window.clone();
     let channels = config.channels as usize;
+    let mut kw = crate::levels::KWeighting::new(config.sample_rate);
     let err = error.clone();
     let mut buf: Vec<f32> = Vec::with_capacity(16 * 1024);
     let stream = device.build_input_stream::<T, _, _>(
@@ -343,6 +344,11 @@ where
             cell.push(&buf);
             tap.feed(&buf);
             window.push_interleaved(&buf, channels);
+            // Loudness: K-weight the mono downmix (BS.1770 sums channels by power,
+            // which needs per-channel filters; mono is a good approximation for mics).
+            let ch = channels.max(1);
+            let (e, n) = kw.block_energy(buf.chunks_exact(ch).map(|f| f.iter().sum::<f32>() / ch as f32));
+            cell.add_k_energy(e, n);
         },
         move |e| {
             log::warn!("capture stream error: {e}");

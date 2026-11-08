@@ -86,6 +86,7 @@ struct App {
     settings_dirty: bool,
     meters: HashMap<DeviceKey, MeterState>,
     history: HashMap<DeviceKey, LevelHistory>,
+    loudness: HashMap<DeviceKey, crate::levels::Loudness>,
     last_frame: Instant,
     /// Slider value being dragged, so refreshes don't make it jump.
     dragging: Option<(DeviceKey, f32)>,
@@ -130,6 +131,7 @@ impl App {
             settings_dirty: false,
             meters: HashMap::new(),
             history: HashMap::new(),
+            loudness: HashMap::new(),
             last_frame: Instant::now(),
             dragging: None,
             show_settings: false,
@@ -219,12 +221,14 @@ impl App {
 
         self.meters.retain(|k, _| readings.iter().any(|(rk, _)| rk == k));
         self.history.retain(|k, _| readings.iter().any(|(rk, _)| rk == k));
+        self.loudness.retain(|k, _| readings.iter().any(|(rk, _)| rk == k));
         for (key, reading) in readings {
             self.history.entry(key.clone()).or_insert_with(LevelHistory::thirty_seconds).push(
                 to_db(reading.peak),
                 to_db(reading.rms),
                 now,
             );
+            self.loudness.entry(key.clone()).or_default().push(now, reading.k_energy, reading.k_samples);
             self.meters.entry(key).or_insert_with(|| MeterState::new(now)).update(reading, dt, now);
         }
     }
@@ -786,6 +790,14 @@ impl App {
                     }
                     if let Some(snr) = h.snr(gate) {
                         stats += &format!(" · SNR {snr:.0}");
+                    }
+                    if let Some(l) = self.loudness.get(&key) {
+                        let now = Instant::now();
+                        if let (Some(mo), Some(st)) = (l.momentary(now), l.short_term(now))
+                            && st > crate::levels::FLOOR_DB
+                        {
+                            stats += &format!("\nM {mo:.0} · S {st:.0} LUFS");
+                        }
                     }
                     if m.clip_count > 0 {
                         stats += &format!("\nclips {}", m.clip_count);

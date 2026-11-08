@@ -339,6 +339,7 @@ mod tests {
                 non_silent_blocks: blocks,
                 energy: 100.0 * 0.0025,
                 samples: 100,
+                ..Default::default()
             };
             rec.tick(r, t0 + Duration::from_millis(i * 100)).unwrap();
         }

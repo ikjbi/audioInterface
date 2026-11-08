@@ -53,6 +53,9 @@ pub struct LevelCell {
     /// take, for an exact RMS over the period regardless of block timing.
     energy_bits: [AtomicU64; CONSUMERS],
     samples: [AtomicU64; CONSUMERS],
+    /// K-weighted energy (f64 bits) and its sample count, for loudness.
+    k_energy_bits: [AtomicU64; CONSUMERS],
+    k_samples: [AtomicU64; CONSUMERS],
     /// Number of audio blocks received in total (detects stalled streams).
     blocks: AtomicU64,
     /// Number of blocks that contained at least one non-zero sample.
@@ -75,6 +78,8 @@ impl Default for LevelCell {
             rms_bits: std::array::from_fn(|_| AtomicU32::new(0)),
             energy_bits: std::array::from_fn(|_| AtomicU64::new(0)),
             samples: std::array::from_fn(|_| AtomicU64::new(0)),
+            k_energy_bits: std::array::from_fn(|_| AtomicU64::new(0)),
+            k_samples: std::array::from_fn(|_| AtomicU64::new(0)),
             blocks: AtomicU64::new(0),
             non_silent_blocks: AtomicU64::new(0),
         }
@@ -92,6 +97,9 @@ pub struct LevelReading {
     pub energy: f64,
     /// Number of samples since the previous take (this consumer).
     pub samples: u64,
+    /// K-weighted energy and sample count since the previous take (loudness).
+    pub k_energy: f64,
+    pub k_samples: u64,
 }
 
 impl LevelReading {
@@ -118,18 +126,17 @@ impl LevelCell {
         self.push_peak_rms(peak, rms);
     }
 
+    /// Audio thread: add K-weighted energy for loudness measurement.
+    pub fn add_k_energy(&self, energy: f64, n: u64) {
+        for i in 0..CONSUMERS {
+            add_f64(&self.k_energy_bits[i], energy);
+            self.k_samples[i].fetch_add(n, Ordering::Relaxed);
+        }
+    }
+
     fn add_energy(&self, energy: f64, n: u64) {
         for i in 0..CONSUMERS {
-            // Lock-free f64 add (compare-exchange loop; uncontended in practice).
-            let cell = &self.energy_bits[i];
-            let mut cur = cell.load(Ordering::Relaxed);
-            loop {
-                let new = (f64::from_bits(cur) + energy).to_bits();
-                match cell.compare_exchange_weak(cur, new, Ordering::Relaxed, Ordering::Relaxed) {
-                    Ok(_) => break,
-                    Err(actual) => cur = actual,
-                }
-            }
+            add_f64(&self.energy_bits[i], energy);
             self.samples[i].fetch_add(n, Ordering::Relaxed);
         }
     }
@@ -161,7 +168,110 @@ impl LevelCell {
             non_silent_blocks: self.non_silent_blocks.load(Ordering::Relaxed),
             energy: f64::from_bits(self.energy_bits[i].swap(0, Ordering::Relaxed)),
             samples: self.samples[i].swap(0, Ordering::Relaxed),
+            k_energy: f64::from_bits(self.k_energy_bits[i].swap(0, Ordering::Relaxed)),
+            k_samples: self.k_samples[i].swap(0, Ordering::Relaxed),
         }
+    }
+}
+
+/// ITU-R BS.1770 / EBU R128 K-weighting: a high-shelf ("head") filter followed
+/// by a high-pass ("RLB") filter. Coefficients are derived for any sample rate
+/// (same formulas as libebur128).
+#[derive(Clone, Debug)]
+pub struct KWeighting {
+    shelf: Biquad,
+    highpass: Biquad,
+}
+
+#[derive(Clone, Debug, Default)]
+struct Biquad {
+    b: [f64; 3],
+    a: [f64; 2],
+    z: [f64; 2],
+}
+
+impl Biquad {
+    fn process(&mut self, x: f64) -> f64 {
+        let y = self.b[0] * x + self.z[0];
+        self.z[0] = self.b[1] * x - self.a[0] * y + self.z[1];
+        self.z[1] = self.b[2] * x - self.a[1] * y;
+        y
+    }
+}
+
+impl KWeighting {
+    pub fn new(sample_rate: u32) -> Self {
+        let fs = sample_rate.max(1) as f64;
+        // Stage 1: high shelf.
+        let (f0, g, q) = (1681.974450955533, 3.999843853973347, 0.7071752369554196);
+        let k = (std::f64::consts::PI * f0 / fs).tan();
+        let vh = 10f64.powf(g / 20.0);
+        let vb = vh.powf(0.4996667741545416);
+        let a0 = 1.0 + k / q + k * k;
+        let shelf = Biquad {
+            b: [(vh + vb * k / q + k * k) / a0, 2.0 * (k * k - vh) / a0, (vh - vb * k / q + k * k) / a0],
+            a: [2.0 * (k * k - 1.0) / a0, (1.0 - k / q + k * k) / a0],
+            z: [0.0; 2],
+        };
+        // Stage 2: high-pass (RLB).
+        let (f0, q) = (38.13547087602444, 0.5003270373238773);
+        let k = (std::f64::consts::PI * f0 / fs).tan();
+        let a0 = 1.0 + k / q + k * k;
+        let highpass =
+            Biquad { b: [1.0, -2.0, 1.0], a: [2.0 * (k * k - 1.0) / a0, (1.0 - k / q + k * k) / a0], z: [0.0; 2] };
+        KWeighting { shelf, highpass }
+    }
+
+    /// Sum of squared K-weighted samples for a block (mono).
+    pub fn block_energy(&mut self, mono: impl Iterator<Item = f32>) -> (f64, u64) {
+        let mut e = 0.0;
+        let mut n = 0;
+        for x in mono {
+            let y = self.highpass.process(self.shelf.process(x as f64));
+            e += y * y;
+            n += 1;
+        }
+        (e, n)
+    }
+}
+
+/// Loudness in LUFS from a mean square of K-weighted samples (one channel).
+pub fn lufs(mean_square: f64) -> f32 {
+    if mean_square <= 0.0 { FLOOR_DB } else { (-0.691 + 10.0 * mean_square.log10()) as f32 }
+}
+
+/// Sliding-window loudness: momentary (400 ms) and short-term (3 s) LUFS.
+#[derive(Clone, Debug, Default)]
+pub struct Loudness {
+    /// (time, K-weighted energy, samples) per UI frame.
+    frames: std::collections::VecDeque<(Instant, f64, u64)>,
+}
+
+impl Loudness {
+    pub fn push(&mut self, now: Instant, energy: f64, samples: u64) {
+        if samples > 0 {
+            self.frames.push_back((now, energy, samples));
+        }
+        while self.frames.front().is_some_and(|f| now.duration_since(f.0) > Duration::from_secs(3)) {
+            self.frames.pop_front();
+        }
+    }
+
+    fn window(&self, now: Instant, span: Duration) -> Option<f32> {
+        let (e, n) = self
+            .frames
+            .iter()
+            .filter(|f| now.duration_since(f.0) <= span)
+            .fold((0.0, 0u64), |(e, n), f| (e + f.1, n + f.2));
+        (n > 0).then(|| lufs(e / n as f64))
+    }
+
+    pub fn momentary(&self, now: Instant) -> Option<f32> {
+        self.window(now, Duration::from_millis(400))
+    }
+
+    pub fn short_term(&self, now: Instant) -> Option<f32> {
+        self.window(now, Duration::from_secs(3))
     }
 }
 
@@ -201,6 +311,18 @@ impl SampleWindow {
         let n = n.min(len);
         let end = self.pos.load(Ordering::Acquire);
         (0..n).map(|i| f32::from_bits(self.data[(end.wrapping_sub(n) + i) % len].load(Ordering::Relaxed))).collect()
+    }
+}
+
+/// Lock-free f64 add (compare-exchange loop; uncontended in practice).
+fn add_f64(cell: &AtomicU64, v: f64) {
+    let mut cur = cell.load(Ordering::Relaxed);
+    loop {
+        let new = (f64::from_bits(cur) + v).to_bits();
+        match cell.compare_exchange_weak(cur, new, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(actual) => cur = actual,
+        }
     }
 }
 
@@ -454,6 +576,44 @@ mod tests {
         assert_eq!(meter_position(-30.0, -60.0), 0.5);
         assert_eq!(meter_position(-90.0, -60.0), 0.0);
         assert_eq!(meter_position(6.0, -60.0), 1.0);
+    }
+
+    #[test]
+    fn k_weighting_matches_the_ebu_reference() {
+        // EBU Tech 3341: a 0 dBFS 1 kHz sine on one channel reads -3.01 LUFS.
+        for rate in [44_100u32, 48_000] {
+            let mut k = KWeighting::new(rate);
+            let sine = (0..rate * 2).map(|i| (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / rate as f32).sin());
+            let (e, n) = k.block_energy(sine);
+            let l = lufs(e / n as f64);
+            assert!((l - -3.01).abs() < 0.05, "{rate} Hz: {l}");
+        }
+        // -20 dB quieter reads 20 LU lower; 100 Hz is attenuated slightly, 20 Hz strongly.
+        let rate = 48_000;
+        let level = |f: f32, amp: f32| {
+            let mut k = KWeighting::new(rate);
+            let s = (0..rate * 2).map(|i| amp * (2.0 * std::f32::consts::PI * f * i as f32 / rate as f32).sin());
+            let (e, n) = k.block_energy(s);
+            lufs(e / n as f64)
+        };
+        assert!((level(1000.0, 0.1) - -23.01).abs() < 0.05);
+        assert!(level(100.0, 1.0) < -3.0 && level(100.0, 1.0) > -5.0);
+        assert!(level(20.0, 1.0) < -10.0);
+    }
+
+    #[test]
+    fn loudness_windows() {
+        let t0 = Instant::now();
+        let mut l = Loudness::default();
+        // About 3 s of mean square 0.5 (≈ -3.7 LUFS), then the last ~430 ms silent.
+        for i in 0..90u64 {
+            let quiet = i >= 76; // the last 13 frames (429 ms) are silent
+            l.push(t0 + Duration::from_millis(i * 33), if quiet { 0.0 } else { 0.5 * 1600.0 }, 1600);
+        }
+        let now = t0 + Duration::from_millis(89 * 33);
+        assert_eq!(l.momentary(now), Some(FLOOR_DB));
+        let s = l.short_term(now).unwrap();
+        assert!(s > -5.0 && s < -3.5, "{s}");
     }
 
     #[test]

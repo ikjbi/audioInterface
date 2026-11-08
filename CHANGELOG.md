@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Loudness (EBU R128)**: momentary (400 ms) and short-term (3 s) LUFS for metered inputs, using
+  BS.1770 K-weighting computed in the capture callback (verified against the EBU 1 kHz reference).
 - **Single instance**: launching the app again brings the running window to the front.
 - **Diagnostics**: "Copy diagnostics" (Settings → Support) and `audio-interface diagnostics`.
 - **Settings export/import**: `settings export|import|path`, plus export and open-folder buttons.
