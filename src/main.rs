@@ -22,6 +22,10 @@ struct Cli {
     #[arg(long, global = true, env = "AUDIO_INTERFACE_MOCK")]
     mock: bool,
 
+    /// Use this settings file instead of the default one in the OS config directory.
+    #[arg(long, global = true, env = "AUDIO_INTERFACE_SETTINGS", value_name = "PATH")]
+    settings: Option<std::path::PathBuf>,
+
     #[command(subcommand)]
     command: Option<Cmd>,
 }
@@ -71,6 +75,13 @@ enum Cmd {
         #[arg(long)]
         seconds: Option<f32>,
     },
+    /// Write the app icon as a PNG (used when packaging).
+    #[command(hide = true)]
+    ExportIcon {
+        path: std::path::PathBuf,
+        #[arg(long, default_value_t = 1024)]
+        size: u32,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -104,9 +115,10 @@ fn make_backend(mock: bool) -> Result<Box<dyn AudioBackend>> {
 
 fn run(cli: Cli) -> Result<()> {
     let mock = cli.mock;
+    let settings_path = cli.settings.clone().or_else(Settings::default_path);
     match cli.command.unwrap_or(Cmd::Gui) {
         Cmd::Gui => {
-            let path = Settings::default_path();
+            let path = settings_path;
             let settings = path.as_deref().map(Settings::load).unwrap_or_default();
             let factory: BackendFactory = if mock {
                 // One shared mock instance, so changes survive reconnects.
@@ -175,6 +187,7 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Meter { device, direction, seconds } => run_meter(mock, device, direction, seconds),
+        Cmd::ExportIcon { path, size } => audio_interface::icon::write_png(&path, size),
     }
 }
 

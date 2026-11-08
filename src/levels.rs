@@ -225,6 +225,68 @@ impl MeterState {
     }
 }
 
+/// Rolling history of levels for the "is my gain drifting?" graph: fixed-length
+/// buckets (e.g. 200 ms each) holding the loudest peak and RMS in that bucket.
+#[derive(Clone, Debug)]
+pub struct LevelHistory {
+    bucket: Duration,
+    capacity: usize,
+    /// (peak dB, rms dB) per bucket, oldest first.
+    buckets: std::collections::VecDeque<(f32, f32)>,
+    current: Option<(f32, f32)>,
+    current_started: Option<Instant>,
+}
+
+impl LevelHistory {
+    pub fn new(bucket: Duration, capacity: usize) -> Self {
+        LevelHistory {
+            bucket,
+            capacity,
+            buckets: std::collections::VecDeque::with_capacity(capacity),
+            current: None,
+            current_started: None,
+        }
+    }
+
+    /// 30 seconds at 5 buckets per second.
+    pub fn thirty_seconds() -> Self {
+        Self::new(Duration::from_millis(200), 150)
+    }
+
+    pub fn push(&mut self, peak_db: f32, rms_db: f32, now: Instant) {
+        let started = *self.current_started.get_or_insert(now);
+        if now.duration_since(started) >= self.bucket {
+            if let Some(c) = self.current.take() {
+                self.buckets.push_back(c);
+                while self.buckets.len() > self.capacity {
+                    self.buckets.pop_front();
+                }
+            }
+            self.current_started = Some(now);
+        }
+        let c = self.current.get_or_insert((FLOOR_DB, FLOOR_DB));
+        c.0 = c.0.max(peak_db);
+        c.1 = c.1.max(rms_db);
+    }
+
+    /// Completed buckets, oldest first.
+    pub fn buckets(&self) -> impl ExactSizeIterator<Item = &(f32, f32)> {
+        self.buckets.iter()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Average RMS (dB) over the buckets that contain sound above `gate_db`,
+    /// i.e. a "typical speaking level" that ignores pauses. `None` if
+    /// there's too little sound to judge.
+    pub fn typical_level(&self, gate_db: f32) -> Option<f32> {
+        let active: Vec<f32> = self.buckets.iter().map(|b| b.1).filter(|&r| r > gate_db).collect();
+        if active.len() < 5 { None } else { Some(active.iter().sum::<f32>() / active.len() as f32) }
+    }
+}
+
 /// Convert interleaved samples of any cpal sample type to f32 in place into
 /// `out`, reusing its allocation.
 pub fn to_f32<T: Copy>(input: &[T], out: &mut Vec<f32>, conv: impl Fn(T) -> f32) {
@@ -310,6 +372,30 @@ mod tests {
         assert!(!m.clipped, "clip indicator releases");
         m.reset_max();
         assert_eq!(m.max_db, FLOOR_DB);
+    }
+
+    #[test]
+    fn history_buckets_and_typical_level() {
+        let t0 = Instant::now();
+        let mut h = LevelHistory::new(Duration::from_millis(100), 4);
+        // 10 frames per bucket, 6 buckets' worth of input -> capacity caps at 4.
+        for i in 0..60u64 {
+            let loud = (i / 10) % 2 == 0;
+            let db = if loud { -20.0 } else { -70.0 };
+            h.push(db + 1.0, db, t0 + Duration::from_millis(i * 10));
+        }
+        let b: Vec<_> = h.buckets().copied().collect();
+        assert_eq!(b.len(), 4);
+        assert_eq!(b[0], (-69.0, -70.0), "oldest kept bucket is a quiet one");
+        assert_eq!(b[1], (-19.0, -20.0));
+        assert_eq!(h.typical_level(-50.0), None, "too few active buckets");
+
+        let mut h = LevelHistory::new(Duration::from_millis(100), 100);
+        for i in 0..200u64 {
+            let db = if (i / 10) % 2 == 0 { -24.0 } else { -80.0 };
+            h.push(db, db, t0 + Duration::from_millis(i * 10));
+        }
+        assert_eq!(h.typical_level(-50.0), Some(-24.0), "pauses are ignored");
     }
 
     #[test]

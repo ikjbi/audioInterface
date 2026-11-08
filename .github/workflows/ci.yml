@@ -95,3 +95,46 @@ jobs:
           pactl info
       - name: Integration test
         run: bash scripts/ci-linux-pulse.sh target/debug/audio-interface
+
+  # Exercise the real Windows/macOS backends. Windows runners have no sound card,
+  # so a virtual one (VB-CABLE) is installed first. The smoke test changes volume,
+  # mute and defaults on whatever devices exist, verifies each change through the
+  # OS, and restores everything.
+  real-devices:
+    name: Real-device smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install a virtual sound card
+        uses: LABSN/sound-ci-helpers@e9d6ba52163a3283714a68412036ddf33f78d49c
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked
+      - name: Device smoke test
+        shell: bash
+        run: python3 scripts/device-smoke.py target/debug/audio-interface ${{ runner.os == 'Windows' && '--require-devices' || '' }}
+      - name: Capture/meter smoke test
+        shell: bash
+        run: |
+          set -x
+          BIN=target/debug/audio-interface
+          if $BIN list --json | python3 -c 'import json,sys; sys.exit(0 if any(d["direction"]=="input" for d in json.load(sys.stdin)) else 1)'; then
+            # Opens a real capture stream on the default input. Fails only if no audio arrives at all.
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              # Capture may be blocked by the microphone permission (TCC) on hosted runners.
+              $BIN meter --seconds 3 | tr '\r' '\n' | grep summary || echo "::warning::macOS capture unavailable on this runner (microphone permission)"
+            else
+              $BIN meter --seconds 3 | tr '\r' '\n' | grep summary
+            fi
+          else
+            echo "no input devices; skipping"
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # Native output peak meter (IAudioMeterInformation)
+            $BIN meter --direction output --seconds 2 | tr '\r' '\n' | grep summary
+          fi

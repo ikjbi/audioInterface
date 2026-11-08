@@ -505,6 +505,7 @@ dependencies = [
  "eframe",
  "env_logger",
  "log",
+ "png",
  "pulseaudio",
  "serde",
  "serde_json",

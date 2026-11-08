@@ -10,6 +10,7 @@
 pub mod backend;
 pub mod bluetooth;
 pub mod gui;
+pub mod icon;
 pub mod levels;
 pub mod meter;
 pub mod model;

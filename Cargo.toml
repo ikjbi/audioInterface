@@ -2,6 +2,7 @@
 name = "audio-interface"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 description = "Cross-platform audio device manager: pick default inputs/outputs, monitor levels, lock mic gain."
 license = "MIT"
 repository = "https://github.com/ikjbi/audioInterface"
@@ -20,6 +21,7 @@ directories = "6.0.0"
 eframe = "0.37.0"
 env_logger = "0.11.11"
 log = "0.4.35"
+png = "0.18"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 

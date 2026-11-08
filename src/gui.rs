@@ -4,21 +4,30 @@
 //! snapshot, drains level cells into meter ballistics, and turns clicks into
 //! [`Request`]s. Nothing in here blocks on the OS.
 
-use crate::levels::{MeterState, SignalStatus, meter_position};
+use crate::levels::{LevelHistory, MeterState, SignalStatus, meter_position, to_db};
 use crate::model::{Device, DeviceKey, DeviceRef, Direction, Transport};
 use crate::service::{Event, EventKind, Request, Service};
 use crate::settings::Settings;
 use eframe::egui::{self, Color32, RichText, Sense, Stroke, Vec2};
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
+
+/// Set to a file path to render the UI, save a PNG screenshot of the window,
+/// and exit. Used for docs and for visual checks in CI.
+pub const SCREENSHOT_ENV: &str = "AUDIO_INTERFACE_SCREENSHOT";
+/// Frames to render before capturing, so meters and layout settle.
+const SCREENSHOT_AFTER_FRAMES: u64 = 300;
 
 pub fn run(service: Service, settings: Settings, settings_path: Option<PathBuf>) -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Audio Interface")
             .with_inner_size([1000.0, 740.0])
-            .with_min_inner_size([440.0, 360.0]),
+            .with_min_inner_size([440.0, 360.0])
+            .with_icon(crate::icon::egui_icon()),
         ..Default::default()
     };
     eframe::run_native(
@@ -47,12 +56,15 @@ struct App {
     settings_path: Option<PathBuf>,
     settings_dirty: bool,
     meters: HashMap<DeviceKey, MeterState>,
+    history: HashMap<DeviceKey, LevelHistory>,
     last_frame: Instant,
     /// Slider value being dragged, so refreshes don't make it jump.
     dragging: Option<(DeviceKey, f32)>,
     show_settings: bool,
     show_log: bool,
     view: View,
+    frame_count: u64,
+    screenshot: Option<(PathBuf, Arc<AtomicBool>)>,
 }
 
 const GREEN: Color32 = Color32::from_rgb(0x3f, 0xb9, 0x50);
@@ -69,11 +81,33 @@ impl App {
             settings_path,
             settings_dirty: false,
             meters: HashMap::new(),
+            history: HashMap::new(),
             last_frame: Instant::now(),
             dragging: None,
             show_settings: false,
             show_log: true,
             view: View::default(),
+            frame_count: 0,
+            screenshot: std::env::var_os(SCREENSHOT_ENV).map(|p| (PathBuf::from(p), Arc::new(AtomicBool::new(false)))),
+        }
+    }
+
+    /// Screenshot mode: request a capture after a while, then close once saved.
+    fn screenshot_step(&mut self, ctx: &egui::Context) {
+        let Some((path, done)) = &self.screenshot else { return };
+        if done.load(Ordering::SeqCst) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else if self.frame_count == SCREENSHOT_AFTER_FRAMES {
+            let (path, done) = (path.clone(), done.clone());
+            let ctx2 = ctx.clone();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |img| {
+                match save_png(&path, &img) {
+                    Ok(()) => eprintln!("screenshot saved to {}", path.display()),
+                    Err(e) => eprintln!("screenshot failed: {e:#}"),
+                }
+                done.store(true, Ordering::SeqCst);
+                ctx2.request_repaint();
+            })));
         }
     }
 
@@ -114,7 +148,13 @@ impl App {
         drop(snap);
 
         self.meters.retain(|k, _| readings.iter().any(|(rk, _)| rk == k));
+        self.history.retain(|k, _| readings.iter().any(|(rk, _)| rk == k));
         for (key, reading) in readings {
+            self.history.entry(key.clone()).or_insert_with(LevelHistory::thirty_seconds).push(
+                to_db(reading.peak),
+                to_db(reading.rms),
+                now,
+            );
             self.meters.entry(key).or_insert_with(|| MeterState::new(now)).update(reading, dt, now);
         }
     }
@@ -250,7 +290,7 @@ impl App {
                         Some((k, v)) if *k == key => *v,
                         _ => vol * 100.0,
                     };
-                    let width = (ui.available_width() - 110.0).max(80.0);
+                    let width = (ui.available_width() - 160.0).max(80.0);
                     ui.spacing_mut().slider_width = width;
                     let resp = ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).suffix("%").fixed_decimals(0));
                     if resp.dragged() || resp.changed() {
@@ -267,7 +307,7 @@ impl App {
                         self.dragging = None;
                     }
                     let mut is_locked = locked.is_some();
-                    let lock_label = if is_locked { "🔒" } else { "🔓" };
+                    let lock_label = if is_locked { "🔒 Locked" } else { "🔓 Lock" };
                     if ui
                         .toggle_value(&mut is_locked, lock_label)
                         .on_hover_text(match locked {
@@ -333,6 +373,27 @@ impl App {
                     self.service.send(Request::SetMonitored(key.clone(), false));
                 }
             });
+            if d.direction == Direction::Input
+                && let Some(h) = self.history.get(&key)
+            {
+                ui.horizontal(|ui| {
+                    let w = (ui.available_width() - 150.0).max(60.0);
+                    draw_history(ui, h, floor, Vec2::new(w, 36.0));
+                    let typical = h.typical_level(floor.max(-60.0) + 10.0);
+                    ui.label(
+                        RichText::new(match typical {
+                            Some(db) => format!("typical\n{db:.0} dB RMS"),
+                            None => "last 30 s".to_string(),
+                        })
+                        .small()
+                        .color(MUTED_TEXT),
+                    )
+                    .on_hover_text(
+                        "Level over the last 30 seconds (light = peak, solid = RMS). \"Typical\" is the average \
+                         RMS while there is sound, ignoring pauses. If it slowly drops, something is lowering your gain.",
+                    );
+                });
+            }
             if !native {
                 match m.status {
                     SignalStatus::Lost => {
@@ -517,6 +578,8 @@ impl eframe::App for App {
             self.settings_window(&ctx);
         }
         self.save_settings_if_needed();
+        self.frame_count += 1;
+        self.screenshot_step(&ctx);
         ctx.request_repaint_after(Duration::from_millis(33));
     }
 
@@ -575,6 +638,53 @@ fn draw_meter(ui: &mut egui::Ui, m: &MeterState, floor_db: f32, size: Vec2) {
         let r = egui::Rect::from_min_size(egui::pos2(rect.right() - 6.0, rect.top()), Vec2::new(6.0, rect.height()));
         painter.rect_filled(r, 0.0, RED);
     }
+}
+
+/// Scrolling level history: peak as a light area, RMS as a solid area, with
+/// guide lines at -18 dB and -6 dB. Newest on the right.
+fn draw_history(ui: &mut egui::Ui, h: &LevelHistory, floor_db: f32, size: Vec2) {
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
+    let y_at = |db: f32| rect.bottom() - rect.height() * meter_position(db, floor_db);
+    for guide in [-18.0, -6.0] {
+        if guide > floor_db {
+            let y = y_at(guide);
+            painter.line_segment(
+                [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                Stroke::new(1.0, Color32::from_white_alpha(25)),
+            );
+        }
+    }
+    let n = h.capacity().max(1);
+    let col_w = rect.width() / n as f32;
+    let len = h.buckets().len();
+    for (i, &(peak, rms)) in h.buckets().enumerate() {
+        let x0 = rect.right() - (len - i) as f32 * col_w;
+        let x1 = x0 + col_w.max(1.0);
+        let color = if peak > -6.0 {
+            RED
+        } else if peak > -18.0 {
+            YELLOW
+        } else {
+            GREEN
+        };
+        let peak_rect = egui::Rect::from_min_max(egui::pos2(x0, y_at(peak)), egui::pos2(x1, rect.bottom()));
+        painter.rect_filled(peak_rect, 0.0, color.gamma_multiply(0.35));
+        let rms_rect = egui::Rect::from_min_max(egui::pos2(x0, y_at(rms)), egui::pos2(x1, rect.bottom()));
+        painter.rect_filled(rms_rect, 0.0, color.gamma_multiply(0.9));
+    }
+}
+
+fn save_png(path: &std::path::Path, img: &egui::ColorImage) -> anyhow::Result<()> {
+    let file = std::io::BufWriter::new(std::fs::File::create(path)?);
+    let mut enc = png::Encoder::new(file, img.size[0] as u32, img.size[1] as u32);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    let mut w = enc.write_header()?;
+    let bytes: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
+    w.write_image_data(&bytes)?;
+    Ok(())
 }
 
 fn transport_icon(t: Transport) -> String {
