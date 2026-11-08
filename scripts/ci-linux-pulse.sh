@@ -87,6 +87,56 @@ assert -12 < max_db < 0, f"expected about -6 dBFS from the monitor, got {max_db}
 print("output meter OK")
 EOF
 
+step "in-use detection (parecord holds the mic)"
+parecord --device=ci_sine_mic /dev/null &
+REC=$!
+sleep 1.5
+$BIN list --json | python3 -c '
+import json, sys
+d = [x for x in json.load(sys.stdin) if x["id"] == "ci_sine_mic"][0]
+print("in_use_by:", d["in_use_by"])
+assert any("parecord" in a.lower() for a in d["in_use_by"]), d
+'
+
+step "auto-record while parecord is using the mic"
+rm -rf rec_auto
+$BIN record --auto --app parecord --seconds 4 --out rec_auto | tr '\r' '\n' | grep -E "Verdict|Files" || true
+kill $REC 2>/dev/null || true
+ls rec_auto
+ls rec_auto/*.csv >/dev/null || fail "auto-record wrote no CSV"
+head -2 rec_auto/*.csv
+grep -q "parecord" rec_auto/*.csv || fail "CSV does not mention the app using the mic"
+
+step "record with audio + gain change mid-recording"
+rm -rf rec
+( sleep 3; pactl set-source-volume ci_sine_mic 50% ) &
+$BIN record ci_sine_mic --audio --seconds 7 --out rec | tr '\r' '\n' | grep -v "^⏺" | tail -20
+pactl set-source-volume ci_sine_mic 100%
+CSV=$(ls rec/*.csv)
+WAV=$(ls rec/*.wav)
+python3 - "$CSV" "$WAV" <<'EOF2'
+import csv, sys, wave
+rows = list(csv.DictReader(open(sys.argv[1])))
+assert len(rows) >= 6, len(rows)
+early = [float(r["rms_db"]) for r in rows[1:3]]
+print("early rms:", early, "gains:", [r["gain_pct"] for r in rows])
+# 0.5-amplitude sine: RMS = 0.354 -> -9.0 dBFS
+assert all(-10.5 < x < -7.5 for x in early), early
+assert rows[1]["gain_pct"] == "100.0" and rows[-1]["gain_pct"] == "50.0"
+late = float(rows[-2]["rms_db"])
+# 50% on PulseAudio's cubic scale = -18 dB
+assert late < early[0] - 12, (late, early)
+w = wave.open(sys.argv[2])
+dur = w.getnframes() / w.getframerate()
+print("wav:", w.getframerate(), "Hz", w.getnchannels(), "ch", round(dur, 2), "s")
+assert w.getnchannels() == 1 and w.getframerate() in (16000, 44100)
+assert 5.0 < dur < 8.5, dur
+print("recording OK")
+EOF2
+$BIN analyze "$CSV" | tee report.txt
+grep -q "OS gain lowered from 100% to 50%" report.txt || fail "gain change not found in report"
+$BIN analyze "$CSV" --json | python3 -c 'import json,sys; r=json.load(sys.stdin); assert any(f["kind"]=="gain_change" for f in r["findings"])'
+
 step "errors"
 if $BIN set-default output does-not-exist 2>err.txt; then fail "expected failure"; fi
 grep -q "no output device matches" err.txt || { cat err.txt; fail "bad error message"; }

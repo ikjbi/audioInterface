@@ -75,6 +75,37 @@ enum Cmd {
         #[arg(long)]
         seconds: Option<f32>,
     },
+    /// Log a device's levels and gain once per second (CSV) until Ctrl+C or
+    /// `--seconds`, then print a drop-analysis report. Use `--auto` to instead
+    /// watch for calls and record every input another app starts using.
+    Record {
+        /// Device to record. Defaults to the default input.
+        device: Option<String>,
+        #[arg(long, value_enum, default_value_t = Direction::Input)]
+        direction: Direction,
+        /// Also record the audio (16 kHz mono WAV).
+        #[arg(long)]
+        audio: bool,
+        /// Stop after this many seconds.
+        #[arg(long)]
+        seconds: Option<f64>,
+        /// Folder for the recordings (default: Documents/Audio Interface Recordings).
+        #[arg(long, value_name = "DIR")]
+        out: Option<std::path::PathBuf>,
+        /// Watch mode: auto-record any input that another app starts using.
+        #[arg(long, conflicts_with = "device")]
+        auto: bool,
+        /// With --auto: only for apps whose name contains this (repeatable), e.g. --app teams
+        #[arg(long = "app", requires = "auto")]
+        apps: Vec<String>,
+    },
+    /// Analyze a recording (CSV written by `record` or the app) and print the report.
+    Analyze {
+        file: std::path::PathBuf,
+        /// Print JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Write the app icon as a PNG (used when packaging).
     #[command(hide = true)]
     ExportIcon {
@@ -103,6 +134,21 @@ fn main() {
     }
 }
 
+fn make_factory(mock: bool) -> BackendFactory {
+    if mock {
+        // One shared mock instance, so changes survive reconnects.
+        let mut demo = MockBackend::demo();
+        demo.animate = true;
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(Some(demo)));
+        Box::new(move || {
+            let m = shared.lock().unwrap().take().context("mock backend already in use")?;
+            Ok(Box::new(m) as Box<dyn AudioBackend>)
+        })
+    } else {
+        Box::new(backend::create)
+    }
+}
+
 fn make_backend(mock: bool) -> Result<Box<dyn AudioBackend>> {
     if mock {
         let mut m = MockBackend::demo();
@@ -120,18 +166,7 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Gui => {
             let path = settings_path;
             let settings = path.as_deref().map(Settings::load).unwrap_or_default();
-            let factory: BackendFactory = if mock {
-                // One shared mock instance, so changes survive reconnects.
-                let mut demo = MockBackend::demo();
-                demo.animate = true;
-                let shared = std::sync::Arc::new(std::sync::Mutex::new(Some(demo)));
-                Box::new(move || {
-                    let m = shared.lock().unwrap().take().context("mock backend already in use")?;
-                    Ok(Box::new(m) as Box<dyn AudioBackend>)
-                })
-            } else {
-                Box::new(backend::create)
-            };
+            let factory = make_factory(mock);
             let service = Service::start(settings.clone(), factory);
             audio_interface::gui::run(service, settings, path).map_err(|e| anyhow::anyhow!("GUI error: {e}"))
         }
@@ -187,7 +222,157 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Meter { device, direction, seconds } => run_meter(mock, device, direction, seconds),
+        Cmd::Record { device, direction, audio, seconds, out, auto, apps } => {
+            let mut settings = settings_path.as_deref().map(Settings::load).unwrap_or_default();
+            if let Some(out) = out {
+                settings.recordings_dir = Some(out);
+            }
+            run_record(mock, settings, device, direction, audio, seconds, auto, apps)
+        }
+        Cmd::Analyze { file, json } => {
+            let rows =
+                audio_interface::analysis::read_csv(&file).with_context(|| format!("read {}", file.display()))?;
+            let report = audio_interface::analysis::analyze(&rows);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                print!("{}", report.to_text(&format!("Audio session report: {name}")));
+            }
+            Ok(())
+        }
         Cmd::ExportIcon { path, size } => audio_interface::icon::write_png(&path, size),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_record(
+    mock: bool,
+    mut settings: Settings,
+    device: Option<String>,
+    direction: Direction,
+    audio: bool,
+    seconds: Option<f64>,
+    auto: bool,
+    apps: Vec<String>,
+) -> Result<()> {
+    use audio_interface::service::Request;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let stop = Arc::new(AtomicBool::new(false));
+    {
+        let stop = stop.clone();
+        ctrlc::set_handler(move || stop.store(true, Ordering::SeqCst)).context("install Ctrl+C handler")?;
+    }
+    if auto {
+        settings.auto_record_calls = true;
+        settings.auto_record_apps = apps;
+        settings.record_audio = audio;
+    }
+    let dir = settings.recordings_dir();
+    let service = Service::start(settings, make_factory(mock));
+
+    // Wait for the first device list.
+    let start = Instant::now();
+    while service.snapshot().generation == 0 {
+        if let Some(e) = service.snapshot().error.clone() {
+            anyhow::bail!("{e}");
+        }
+        if start.elapsed() > Duration::from_secs(10) {
+            anyhow::bail!("timed out waiting for the audio system");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    if auto {
+        eprintln!("Watching for calls; recordings go to {}. Ctrl+C to stop.", dir.display());
+    } else {
+        let devices = service.snapshot().devices.clone();
+        let d = match &device {
+            Some(q) => resolve_device(&devices, direction, q)?.clone(),
+            None => devices
+                .iter()
+                .find(|d| d.direction == direction && d.is_default)
+                .cloned()
+                .with_context(|| format!("no default {direction} device"))?,
+        };
+        service.send(Request::StartRecording { key: d.key(), audio });
+        eprintln!("Recording \"{}\" to {}. Ctrl+C to stop.", d.name, dir.display());
+    }
+
+    let mut finished_seen = 0;
+    let started = Instant::now();
+    loop {
+        std::thread::sleep(Duration::from_millis(250));
+        {
+            let snap = service.snapshot();
+            for f in snap.finished.iter().skip(finished_seen) {
+                println!();
+                print!(
+                    "{}",
+                    f.report.to_text(&format!("Audio session report: {} ({})", f.info.device_name, f.info.started))
+                );
+                println!("\nFiles: {}", f.info.csv_path.display());
+                for w in &f.info.wav_paths {
+                    println!("       {}", w.display());
+                }
+            }
+            finished_seen = snap.finished.len();
+            match snap.recordings.first() {
+                Some(r) => {
+                    let last = r.recent.last();
+                    print!(
+                        "\r⏺ {}  {}  level {:>6.1} dBFS  gain {:>5}  {}   ",
+                        r.info.device_name,
+                        audio_interface::analysis::fmt_duration(r.elapsed_s),
+                        last.map(|x| x.rms_db).unwrap_or(-96.0),
+                        last.and_then(|x| x.gain_pct).map(|g| format!("{g:.0}%")).unwrap_or_else(|| "n/a".into()),
+                        last.map(|x| x.status.as_str()).unwrap_or("starting")
+                    );
+                }
+                None if auto => print!("\rWaiting for a call… ({} recorded so far)        ", finished_seen),
+                None => {}
+            }
+            let _ = std::io::stdout().flush();
+            if !auto && snap.recordings.is_empty() && finished_seen > 0 {
+                return Ok(());
+            }
+            if let Some(e) = snap.events.back().filter(|e| e.kind == audio_interface::service::EventKind::Error)
+                && !auto
+                && snap.recordings.is_empty()
+                && started.elapsed() > Duration::from_secs(2)
+            {
+                anyhow::bail!("{}", e.text);
+            }
+        }
+        let timed_out = seconds.is_some_and(|s| started.elapsed().as_secs_f64() >= s);
+        if stop.load(Ordering::SeqCst) || timed_out {
+            let keys: Vec<_> = service.snapshot().recordings.iter().map(|r| r.info.key.clone()).collect();
+            for k in &keys {
+                service.send(Request::StopRecording(k.clone()));
+            }
+            // Wait for the reports.
+            let t = Instant::now();
+            while service.snapshot().finished.len() < finished_seen + keys.len()
+                && t.elapsed() < Duration::from_secs(15)
+            {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let snap = service.snapshot();
+            for f in snap.finished.iter().skip(finished_seen) {
+                println!();
+                print!(
+                    "{}",
+                    f.report.to_text(&format!("Audio session report: {} ({})", f.info.device_name, f.info.started))
+                );
+                println!("\nFiles: {}", f.info.csv_path.display());
+                for w in &f.info.wav_paths {
+                    println!("       {}", w.display());
+                }
+            }
+            return Ok(());
+        }
     }
 }
 

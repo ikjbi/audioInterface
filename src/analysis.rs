@@ -272,7 +272,10 @@ pub fn analyze_with(samples: &[Sample], p: &Params) -> Report {
         }
     }
     for s in samples {
-        for e in s.event.split(';').map(str::trim).filter(|e| !e.is_empty()) {
+        let markers = ["Recording started", "Recording stopped"];
+        for e in
+            s.event.split(';').map(str::trim).filter(|e| !e.is_empty() && !markers.iter().any(|m| e.starts_with(m)))
+        {
             findings.push(Finding::Event { t: s.t, time: s.time.clone(), text: e.to_string() });
         }
     }

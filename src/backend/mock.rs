@@ -94,7 +94,8 @@ impl AudioBackend for MockBackend {
         if d.muted == Some(true) {
             return Some(0.0);
         }
-        let seed = id.bytes().fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32)) as f32;
+        // Keep the seed small: added to time in f32, a large value would swallow it.
+        let seed = (id.bytes().fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32)) % 997) as f32;
         let t = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| (d.as_secs_f64() % 1000.0) as f32)

@@ -610,7 +610,15 @@ impl Worker {
         let (new_events, total): (Vec<String>, u64) = {
             let s = self.shared();
             let n = (s.total_events - forwarded).min(s.events.len() as u64) as usize;
-            (s.events.iter().skip(s.events.len() - n).map(|e| e.text.clone()).collect(), s.total_events)
+            let texts = s
+                .events
+                .iter()
+                .skip(s.events.len() - n)
+                // The recorder logs its own start/stop.
+                .filter(|e| !e.text.starts_with("Recording "))
+                .map(|e| e.text.clone())
+                .collect();
+            (texts, s.total_events)
         };
         self.events_forwarded = total;
         if self.recorders.is_empty() {
