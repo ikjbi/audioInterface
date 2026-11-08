@@ -60,6 +60,16 @@ pub struct Settings {
     pub hotkey_next_input: String,
     /// Closing the window keeps the app running in the tray / menu bar.
     pub close_to_tray: bool,
+    pub theme: Theme,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    #[default]
+    System,
+    Light,
+    Dark,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -102,6 +112,7 @@ impl Default for Settings {
             hotkey_next_output: "Ctrl+Alt+O".into(),
             hotkey_next_input: "Ctrl+Alt+I".into(),
             close_to_tray: true,
+            theme: Theme::System,
         }
     }
 }

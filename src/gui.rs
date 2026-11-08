@@ -867,6 +867,16 @@ impl App {
                     .checkbox(&mut self.settings.close_to_tray, "Closing the window keeps running in the tray / menu bar")
                     .changed();
             }
+            ui.horizontal(|ui| {
+                ui.label("Theme");
+                for (t, label) in [
+                    (crate::settings::Theme::System, "System"),
+                    (crate::settings::Theme::Light, "Light"),
+                    (crate::settings::Theme::Dark, "Dark"),
+                ] {
+                    changed |= ui.selectable_value(&mut self.settings.theme, t, label).changed();
+                }
+            });
             changed |= ui
                 .checkbox(&mut self.settings.notifications, "Desktop notifications")
                 .on_hover_text(
@@ -1063,6 +1073,14 @@ impl eframe::App for App {
     /// Runs every frame, and also while the window is hidden in the tray.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.pull();
+        let theme = match self.settings.theme {
+            crate::settings::Theme::System => egui::ThemePreference::System,
+            crate::settings::Theme::Light => egui::ThemePreference::Light,
+            crate::settings::Theme::Dark => egui::ThemePreference::Dark,
+        };
+        if ctx.options(|o| o.theme_preference) != theme {
+            ctx.set_theme(theme);
+        }
         if let Some(mut desktop) = self.desktop.take() {
             desktop.update_hotkeys(&self.settings);
             for cmd in desktop.poll() {
@@ -1190,7 +1208,7 @@ fn draw_meter(ui: &mut egui::Ui, m: &MeterState, floor_db: f32, size: Vec2) {
     if px > rect.left() + 1.0 {
         painter.line_segment(
             [egui::pos2(px, rect.top()), egui::pos2(px, rect.bottom())],
-            Stroke::new(2.0, Color32::WHITE),
+            Stroke::new(2.0, ui.visuals().strong_text_color()),
         );
     }
     // Scale ticks every 6 dB.
@@ -1199,7 +1217,7 @@ fn draw_meter(ui: &mut egui::Ui, m: &MeterState, floor_db: f32, size: Vec2) {
         let x = x_at(db);
         painter.line_segment(
             [egui::pos2(x, rect.bottom() - 3.0), egui::pos2(x, rect.bottom())],
-            Stroke::new(1.0, Color32::from_white_alpha(60)),
+            Stroke::new(1.0, ui.visuals().text_color().gamma_multiply(0.24)),
         );
         db -= 6.0;
     }
@@ -1235,7 +1253,7 @@ fn draw_spectrum(ui: &mut egui::Ui, bands: &[f32], floor_db: f32, size: Vec2) {
         let x = rect.left() + rect.width() * ((f / crate::spectrum::F_MIN).ln() / span);
         painter.line_segment(
             [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-            Stroke::new(1.0, Color32::from_white_alpha(25)),
+            Stroke::new(1.0, ui.visuals().text_color().gamma_multiply(0.10)),
         );
         painter.text(
             egui::pos2(x + 2.0, rect.top() + 1.0),
@@ -1259,7 +1277,7 @@ fn draw_history(ui: &mut egui::Ui, h: &LevelHistory, floor_db: f32, size: Vec2) 
             let y = y_at(guide);
             painter.line_segment(
                 [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-                Stroke::new(1.0, Color32::from_white_alpha(25)),
+                Stroke::new(1.0, ui.visuals().text_color().gamma_multiply(0.10)),
             );
         }
     }

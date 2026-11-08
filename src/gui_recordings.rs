@@ -272,7 +272,7 @@ pub fn session_chart(ui: &mut egui::Ui, rows: &[Sample], report: Option<&Report>
         let y = y_db(db);
         painter.line_segment(
             [pos2(rect.left(), y), pos2(rect.right(), y)],
-            Stroke::new(1.0, Color32::from_white_alpha(18)),
+            Stroke::new(1.0, ui.visuals().text_color().gamma_multiply(0.07)),
         );
         painter.text(
             pos2(rect.left() + 3.0, y - 1.0),
@@ -360,7 +360,7 @@ pub fn session_chart(ui: &mut egui::Ui, rows: &[Sample], report: Option<&Report>
         if let Some(r) = rows.iter().min_by(|a, b| (a.t - t).abs().total_cmp(&(b.t - t).abs())) {
             painter.line_segment(
                 [pos2(p.x, rect.top()), pos2(p.x, rect.bottom())],
-                Stroke::new(1.0, Color32::from_white_alpha(80)),
+                Stroke::new(1.0, ui.visuals().text_color().gamma_multiply(0.31)),
             );
             let text = format!(
                 "{}  level {:.1} dBFS  gain {}{}",
@@ -375,7 +375,7 @@ pub fn session_chart(ui: &mut egui::Ui, rows: &[Sample], report: Option<&Report>
                 anchor,
                 text,
                 egui::FontId::monospace(11.0),
-                Color32::WHITE,
+                ui.visuals().strong_text_color(),
             );
         }
     }
