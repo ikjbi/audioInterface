@@ -147,18 +147,49 @@ impl AudioBackend for PulseBackend {
     }
 
     fn devices(&mut self) -> Result<Vec<Device>> {
-        let (server, sinks, sources, cards) = self.with_conn(|c| {
+        let (server, sinks, sources, cards, rec_streams, play_streams) = self.with_conn(|c| {
             let server: protocol::ServerInfo = c.request(Command::GetServerInfo)?;
             let sinks: protocol::SinkInfoList = c.request(Command::GetSinkInfoList)?;
             let sources: protocol::SourceInfoList = c.request(Command::GetSourceInfoList)?;
             // Card info is only used for Bluetooth profile detection. Don't fail
             // the listing if a server doesn't support it.
             let cards: protocol::CardInfoList = c.request(Command::GetCardInfoList).unwrap_or_default();
-            Ok((server, sinks, sources, cards))
+            // Streams, to see which apps use which device ("in use by").
+            let outputs: protocol::SourceOutputInfoList =
+                c.request(Command::GetSourceOutputInfoList).unwrap_or_default();
+            let inputs: protocol::SinkInputInfoList = c.request(Command::GetSinkInputInfoList).unwrap_or_default();
+            Ok((server, sinks, sources, cards, outputs, inputs))
         })?;
 
         let card_profile: HashMap<u32, String> =
             cards.iter().filter_map(|c| Some((c.index, cstr(c.active_profile.as_ref()?)))).collect();
+        // device index -> app names, excluding our own streams (the meters).
+        let own_pid = std::process::id().to_string();
+        let app_of = |props: &protocol::Props| -> Option<String> {
+            if prop(props, c"application.process.id") == Some(own_pid.as_str()) {
+                return None;
+            }
+            let raw = prop(props, c"application.name").or_else(|| prop(props, c"application.process.binary"))?;
+            Some(crate::model::friendly_app_name(raw))
+        };
+        let mut source_users: HashMap<u32, Vec<String>> = HashMap::new();
+        for o in &rec_streams {
+            if let Some(name) = app_of(&o.props) {
+                let list = source_users.entry(o.source_index).or_default();
+                if !list.contains(&name) {
+                    list.push(name);
+                }
+            }
+        }
+        let mut sink_users: HashMap<u32, Vec<String>> = HashMap::new();
+        for i in &play_streams {
+            if let Some(name) = app_of(&i.props) {
+                let list = sink_users.entry(i.sink_index).or_default();
+                if !list.contains(&name) {
+                    list.push(name);
+                }
+            }
+        }
         let default_sink = server.default_sink_name.as_deref().map(cstr);
         let default_source = server.default_source_name.as_deref().map(cstr);
 
@@ -197,6 +228,7 @@ impl AudioBackend for PulseBackend {
                 volume: volume_scalar(cv),
                 muted: Some(muted),
                 hands_free,
+                in_use_by: Vec::new(),
             });
         };
 
@@ -218,6 +250,9 @@ impl AudioBackend for PulseBackend {
                 &s.cvolume,
                 s.muted,
             );
+            if let Some(last) = out.last_mut() {
+                last.in_use_by = sink_users.remove(&s.index).unwrap_or_default();
+            }
         }
         for s in &sources {
             // Monitor sources are loopbacks of outputs, not real inputs.
@@ -238,6 +273,9 @@ impl AudioBackend for PulseBackend {
                 &s.cvolume,
                 s.muted,
             );
+            if let Some(last) = out.last_mut() {
+                last.in_use_by = source_users.remove(&s.index).unwrap_or_default();
+            }
         }
         Ok(out)
     }

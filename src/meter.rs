@@ -22,8 +22,49 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// Optional raw-audio tap on a capture stream, used to record audio to disk.
+/// The realtime callback downmixes to mono and pushes into a lock-free ring
+/// buffer, but only while a recorder is attached. It never blocks: it uses
+/// `try_lock` and drops samples if the ring is full.
+pub struct AudioTap {
+    pub sample_rate: u32,
+    pub channels: u16,
+    producer: Mutex<Option<rtrb::Producer<f32>>>,
+}
+
+impl AudioTap {
+    pub fn new(sample_rate: u32, channels: u16) -> Self {
+        AudioTap { sample_rate, channels: channels.max(1), producer: Mutex::new(None) }
+    }
+
+    /// Start receiving mono audio. `seconds` of buffering are allocated.
+    pub fn attach(&self, seconds: u32) -> rtrb::Consumer<f32> {
+        let (producer, consumer) = rtrb::RingBuffer::new((self.sample_rate * seconds.max(1)) as usize);
+        *self.producer.lock().unwrap_or_else(|e| e.into_inner()) = Some(producer);
+        consumer
+    }
+
+    pub fn detach(&self) {
+        *self.producer.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// Called from the audio thread.
+    pub(crate) fn feed(&self, interleaved: &[f32]) {
+        let Ok(mut guard) = self.producer.try_lock() else { return };
+        let Some(p) = guard.as_mut() else { return };
+        let ch = self.channels as usize;
+        for frame in interleaved.chunks_exact(ch) {
+            let mono = frame.iter().sum::<f32>() / ch as f32;
+            if p.push(mono).is_err() {
+                break; // writer fell behind; drop rather than block
+            }
+        }
+    }
+}
+
 struct Monitor {
     cell: Arc<LevelCell>,
+    tap: Arc<AudioTap>,
     error: Arc<Mutex<Option<String>>>,
     capture_id: String,
     started: Instant,
@@ -78,6 +119,11 @@ impl MeterEngine {
 
     pub fn cell(&self, key: &DeviceKey) -> Option<Arc<LevelCell>> {
         self.monitors.get(key).map(|m| m.cell.clone())
+    }
+
+    /// Raw-audio tap of a running capture stream (for recording audio).
+    pub fn tap(&self, key: &DeviceKey) -> Option<Arc<AudioTap>> {
+        self.monitors.get(key).map(|m| m.tap.clone())
     }
 
     pub fn error(&self, key: &DeviceKey) -> Option<String> {
@@ -238,27 +284,29 @@ fn open(capture_id: &str) -> Result<Monitor> {
     let config = supported.config();
     let cell = Arc::new(LevelCell::default());
     let error = Arc::new(Mutex::new(None));
+    let tap = Arc::new(AudioTap::new(config.sample_rate, config.channels));
 
     let stream = match supported.sample_format() {
-        SampleFormat::F32 => build::<f32>(&device, config, &cell, &error),
-        SampleFormat::F64 => build::<f64>(&device, config, &cell, &error),
-        SampleFormat::I8 => build::<i8>(&device, config, &cell, &error),
-        SampleFormat::I16 => build::<i16>(&device, config, &cell, &error),
-        SampleFormat::I24 => build::<cpal::I24>(&device, config, &cell, &error),
-        SampleFormat::I32 => build::<i32>(&device, config, &cell, &error),
-        SampleFormat::U8 => build::<u8>(&device, config, &cell, &error),
-        SampleFormat::U16 => build::<u16>(&device, config, &cell, &error),
-        SampleFormat::U32 => build::<u32>(&device, config, &cell, &error),
+        SampleFormat::F32 => build::<f32>(&device, config, &cell, &tap, &error),
+        SampleFormat::F64 => build::<f64>(&device, config, &cell, &tap, &error),
+        SampleFormat::I8 => build::<i8>(&device, config, &cell, &tap, &error),
+        SampleFormat::I16 => build::<i16>(&device, config, &cell, &tap, &error),
+        SampleFormat::I24 => build::<cpal::I24>(&device, config, &cell, &tap, &error),
+        SampleFormat::I32 => build::<i32>(&device, config, &cell, &tap, &error),
+        SampleFormat::U8 => build::<u8>(&device, config, &cell, &tap, &error),
+        SampleFormat::U16 => build::<u16>(&device, config, &cell, &tap, &error),
+        SampleFormat::U32 => build::<u32>(&device, config, &cell, &tap, &error),
         other => Err(anyhow!("unsupported sample format {other:?}")),
     }?;
     stream.play().context("start capture stream")?;
-    Ok(Monitor { cell, error, capture_id: capture_id.to_string(), started: Instant::now(), _stream: stream })
+    Ok(Monitor { cell, tap, error, capture_id: capture_id.to_string(), started: Instant::now(), _stream: stream })
 }
 
 fn build<T>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
     cell: &Arc<LevelCell>,
+    tap: &Arc<AudioTap>,
     error: &Arc<Mutex<Option<String>>>,
 ) -> Result<cpal::Stream>
 where
@@ -266,6 +314,7 @@ where
     f32: FromSample<T>,
 {
     let cell = cell.clone();
+    let tap = tap.clone();
     let err = error.clone();
     let mut buf: Vec<f32> = Vec::with_capacity(16 * 1024);
     let stream = device.build_input_stream::<T, _, _>(
@@ -274,6 +323,7 @@ where
             buf.clear();
             buf.extend(data.iter().map(|s| s.to_sample::<f32>()));
             cell.push(&buf);
+            tap.feed(&buf);
         },
         move |e| {
             log::warn!("capture stream error: {e}");
@@ -288,6 +338,21 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tap_downmixes_and_only_feeds_when_attached() {
+        let tap = super::AudioTap::new(4, 2);
+        tap.feed(&[1.0, 0.0]); // not attached: dropped
+        let mut rx = tap.attach(2); // 8 slots
+        tap.feed(&[1.0, 0.0, 0.5, 0.5, -1.0, -1.0]);
+        let got: Vec<f32> = std::iter::from_fn(|| rx.pop().ok()).collect();
+        assert_eq!(got, vec![0.5, 0.5, -1.0]);
+        tap.feed(&[0.0; 40]); // overflow: drops, never blocks
+        assert_eq!(std::iter::from_fn(|| rx.pop().ok()).count(), 8);
+        tap.detach();
+        tap.feed(&[1.0, 1.0]);
+        assert!(rx.pop().is_err());
+    }
+
     #[test]
     fn access_denied_gets_privacy_hint() {
         let e =

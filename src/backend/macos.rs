@@ -8,6 +8,7 @@ use super::{AudioBackend, clamp_volume};
 use crate::bluetooth;
 use crate::model::{Device, Direction, Transport};
 use anyhow::{Result, anyhow, bail};
+use std::collections::HashMap;
 use std::ffi::{c_char, c_void};
 use std::ptr;
 
@@ -64,6 +65,17 @@ unsafe extern "C" {
     fn CFRelease(cf: *const c_void);
 }
 
+unsafe extern "C" {
+    /// libproc (part of libSystem): short name of a process.
+    fn proc_name(pid: i32, buffer: *mut c_void, buffersize: u32) -> i32;
+}
+
+fn process_name(pid: i32) -> Option<String> {
+    let mut buf = [0u8; 256];
+    let n = unsafe { proc_name(pid, buf.as_mut_ptr() as *mut c_void, buf.len() as u32) };
+    (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
+}
+
 const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 
 const fn fourcc(s: &[u8; 4]) -> u32 {
@@ -90,6 +102,13 @@ const DEV_STEREO_CHANNELS: u32 = fourcc(b"dch2");
 const DEV_NOMINAL_RATE: u32 = fourcc(b"nsrt");
 const DEV_CAN_BE_DEFAULT: u32 = fourcc(b"dflt");
 const DEV_CAN_BE_SYSTEM_DEFAULT: u32 = fourcc(b"sflt");
+// Process objects (macOS 14+): which apps are doing audio I/O on which device.
+const HW_PROCESS_LIST: u32 = fourcc(b"prs#");
+const PROC_PID: u32 = fourcc(b"ppid");
+const PROC_BUNDLE_ID: u32 = fourcc(b"pbid");
+const PROC_DEVICES: u32 = fourcc(b"pdv#");
+const PROC_RUNNING_INPUT: u32 = fourcc(b"piri");
+const PROC_RUNNING_OUTPUT: u32 = fourcc(b"piro");
 
 fn addr(selector: u32, scope: u32, element: u32) -> AudioObjectPropertyAddress {
     AudioObjectPropertyAddress { selector, scope, element }
@@ -259,6 +278,48 @@ impl CoreAudioBackend {
         if has(id, &a) { get::<u32>(id, &a).ok().map(|m| m != 0) } else { None }
     }
 
+    /// (device, direction) -> names of other apps doing I/O on it. Empty on
+    /// macOS versions without process objects (before 14).
+    fn device_users(&self) -> HashMap<(AudioObjectID, Direction), Vec<String>> {
+        let mut users: HashMap<(AudioObjectID, Direction), Vec<String>> = HashMap::new();
+        let Ok(procs) = get_array::<AudioObjectID>(SYSTEM_OBJECT, &addr(HW_PROCESS_LIST, SCOPE_GLOBAL, ELEMENT_MAIN))
+        else {
+            return users;
+        };
+        let own_pid = std::process::id() as i32;
+        for p in procs {
+            if get::<i32>(p, &addr(PROC_PID, SCOPE_GLOBAL, ELEMENT_MAIN)).ok() == Some(own_pid) {
+                continue;
+            }
+            let pid = get::<i32>(p, &addr(PROC_PID, SCOPE_GLOBAL, ELEMENT_MAIN)).ok();
+            let name = get_string(p, &addr(PROC_BUNDLE_ID, SCOPE_GLOBAL, ELEMENT_MAIN))
+                .ok()
+                .filter(|s| !s.is_empty())
+                .or_else(|| pid.and_then(process_name))
+                .or_else(|| pid.map(|pid| format!("pid {pid}")))
+                .map(|raw| crate::model::friendly_app_name(&raw))
+                .unwrap_or_else(|| "unknown app".into());
+            for (direction, running_sel) in
+                [(Direction::Input, PROC_RUNNING_INPUT), (Direction::Output, PROC_RUNNING_OUTPUT)]
+            {
+                let running =
+                    get::<u32>(p, &addr(running_sel, SCOPE_GLOBAL, ELEMENT_MAIN)).map(|v| v != 0).unwrap_or(false);
+                if !running {
+                    continue;
+                }
+                let devs = get_array::<AudioObjectID>(p, &addr(PROC_DEVICES, scope_of(direction), ELEMENT_MAIN))
+                    .unwrap_or_default();
+                for d in devs {
+                    let list = users.entry((d, direction)).or_default();
+                    if !list.contains(&name) {
+                        list.push(name.clone());
+                    }
+                }
+            }
+        }
+        users
+    }
+
     fn describe(&self, id: AudioObjectID, direction: Direction, default: Option<AudioObjectID>) -> Option<Device> {
         let uid = get_string(id, &addr(DEV_UID, SCOPE_GLOBAL, ELEMENT_MAIN)).ok()?;
         let name = get_string(id, &addr(OBJ_NAME, SCOPE_GLOBAL, ELEMENT_MAIN)).unwrap_or_else(|_| uid.clone());
@@ -283,6 +344,7 @@ impl CoreAudioBackend {
             volume: self.read_volume(id, direction),
             muted: self.read_mute(id, direction),
             hands_free,
+            in_use_by: Vec::new(),
         })
     }
 }
@@ -294,6 +356,7 @@ impl AudioBackend for CoreAudioBackend {
 
     fn devices(&mut self) -> Result<Vec<Device>> {
         let ids = self.device_ids()?;
+        let mut users = self.device_users();
         let mut out = Vec::new();
         for direction in Direction::ALL {
             let default = self.default_device(direction);
@@ -307,7 +370,8 @@ impl AudioBackend for CoreAudioBackend {
                 if has(id, &can) && get::<u32>(id, &can).map(|v| v == 0).unwrap_or(false) {
                     continue;
                 }
-                if let Some(d) = self.describe(id, direction, default) {
+                if let Some(mut d) = self.describe(id, direction, default) {
+                    d.in_use_by = users.remove(&(id, direction)).unwrap_or_default();
                     out.push(d);
                 }
             }

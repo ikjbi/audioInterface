@@ -17,11 +17,16 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive", "env"] }
+csv = "1.4.0"
+ctrlc = "3.5.2"
 directories = "6.0.0"
 eframe = "0.37.0"
 env_logger = "0.11.11"
+hound = "3.5.1"
+jiff = "0.2.41"
 log = "0.4.35"
 png = "0.18"
+rtrb = "0.4.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 

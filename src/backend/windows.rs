@@ -15,16 +15,18 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Foundation::PROPERTYKEY;
+use windows::Win32::Foundation::S_OK;
 use windows::Win32::Media::Audio::Endpoints::{IAudioEndpointVolume, IAudioMeterInformation};
 use windows::Win32::Media::Audio::{
-    DEVICE_STATE_ACTIVE, EDataFlow, ERole, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
-    PKEY_AudioEndpoint_FormFactor, eCapture, eCommunications, eConsole, eMultimedia, eRender,
+    AudioSessionStateActive, DEVICE_STATE_ACTIVE, EDataFlow, ERole, IAudioSessionControl2, IAudioSessionManager2,
+    IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, PKEY_AudioEndpoint_FormFactor, eCapture, eCommunications,
+    eConsole, eMultimedia, eRender,
 };
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, STGM_READ,
 };
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
-use windows::core::{GUID, HRESULT, HSTRING, IUnknown, IUnknown_Vtbl, PCWSTR, interface};
+use windows::core::{GUID, HRESULT, HSTRING, IUnknown, IUnknown_Vtbl, Interface, PCWSTR, interface};
 
 /// Undocumented `IPolicyConfig` (Windows 7+). Only `SetDefaultEndpoint` is
 /// called. The other methods are declared to keep the vtable layout right.
@@ -113,6 +115,46 @@ unsafe fn device_id(dev: &IMMDevice) -> Result<String> {
     }
 }
 
+/// Other processes with an active audio session on this endpoint (e.g. Teams
+/// capturing from the mic during a call). Our own process is excluded.
+fn session_users(dev: &IMMDevice) -> Vec<String> {
+    let own = std::process::id();
+    let mut out: Vec<String> = Vec::new();
+    unsafe {
+        let Ok(mgr) = dev.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) else { return out };
+        let Ok(sessions) = mgr.GetSessionEnumerator() else { return out };
+        for i in 0..sessions.GetCount().unwrap_or(0) {
+            let Ok(ctl) = sessions.GetSession(i) else { continue };
+            if ctl.GetState().ok() != Some(AudioSessionStateActive) {
+                continue;
+            }
+            let Ok(ctl2) = ctl.cast::<IAudioSessionControl2>() else { continue };
+            if ctl2.IsSystemSoundsSession() == S_OK {
+                continue;
+            }
+            let pid = ctl2.GetProcessId().unwrap_or(0);
+            if pid == own {
+                continue;
+            }
+            let raw = ctl2
+                .GetSessionIdentifier()
+                .ok()
+                .and_then(|p| {
+                    let s = p.to_string().ok();
+                    CoTaskMemFree(Some(p.0 as *const c_void));
+                    s
+                })
+                .and_then(|id| crate::model::exe_from_windows_session_id(&id))
+                .unwrap_or_else(|| format!("pid {pid}"));
+            let name = crate::model::friendly_app_name(&raw);
+            if !out.contains(&name) {
+                out.push(name);
+            }
+        }
+    }
+    out
+}
+
 fn prop_string(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<String> {
     let v = unsafe { store.GetValue(key) }.ok()?;
     let s = v.to_string();
@@ -171,6 +213,7 @@ impl AudioBackend for WasapiBackend {
                     volume,
                     muted,
                     hands_free,
+                    in_use_by: session_users(&dev),
                 });
             }
         }

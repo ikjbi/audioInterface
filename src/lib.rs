@@ -7,6 +7,7 @@
 //! * [`service`]: background worker that ties it all together
 //! * [`gui`]: the egui desktop interface
 
+pub mod analysis;
 pub mod backend;
 pub mod bluetooth;
 pub mod gui;
@@ -14,6 +15,7 @@ pub mod icon;
 pub mod levels;
 pub mod meter;
 pub mod model;
+pub mod recorder;
 pub mod rules;
 pub mod service;
 pub mod settings;

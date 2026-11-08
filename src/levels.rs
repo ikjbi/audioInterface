@@ -45,19 +45,30 @@ pub fn meter_position(db: f32, min_db: f32) -> f32 {
 /// works without locks.
 #[derive(Debug)]
 pub struct LevelCell {
-    peak_bits: AtomicU32,
-    rms_bits: AtomicU32,
+    /// Per-consumer maxima, so the UI and a recorder can each drain their own
+    /// copy without stealing peaks from each other.
+    peak_bits: [AtomicU32; CONSUMERS],
+    rms_bits: [AtomicU32; CONSUMERS],
     /// Number of audio blocks received in total (detects stalled streams).
     blocks: AtomicU64,
     /// Number of blocks that contained at least one non-zero sample.
     non_silent_blocks: AtomicU64,
 }
 
+const CONSUMERS: usize = 2;
+
+/// Who is reading a [`LevelCell`]. Each consumer has independent maxima.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Consumer {
+    Ui = 0,
+    Recorder = 1,
+}
+
 impl Default for LevelCell {
     fn default() -> Self {
         LevelCell {
-            peak_bits: AtomicU32::new(0),
-            rms_bits: AtomicU32::new(0),
+            peak_bits: std::array::from_fn(|_| AtomicU32::new(0)),
+            rms_bits: std::array::from_fn(|_| AtomicU32::new(0)),
             blocks: AtomicU64::new(0),
             non_silent_blocks: AtomicU64::new(0),
         }
@@ -82,19 +93,28 @@ impl LevelCell {
     }
 
     pub fn push_levels(&self, peak: f32, rms: f32) {
-        self.peak_bits.fetch_max(peak.max(0.0).to_bits(), Ordering::Relaxed);
-        self.rms_bits.fetch_max(rms.max(0.0).to_bits(), Ordering::Relaxed);
+        let (p, r) = (peak.max(0.0).to_bits(), rms.max(0.0).to_bits());
+        for i in 0..CONSUMERS {
+            self.peak_bits[i].fetch_max(p, Ordering::Relaxed);
+            self.rms_bits[i].fetch_max(r, Ordering::Relaxed);
+        }
         self.blocks.fetch_add(1, Ordering::Relaxed);
         if peak > 0.0 {
             self.non_silent_blocks.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    /// Read and reset the peak/RMS maxima. Block counters are cumulative.
+    /// Read and reset the UI's peak/RMS maxima. Block counters are cumulative.
     pub fn take(&self) -> LevelReading {
+        self.take_for(Consumer::Ui)
+    }
+
+    /// Read and reset one consumer's maxima.
+    pub fn take_for(&self, consumer: Consumer) -> LevelReading {
+        let i = consumer as usize;
         LevelReading {
-            peak: f32::from_bits(self.peak_bits.swap(0, Ordering::Relaxed)),
-            rms: f32::from_bits(self.rms_bits.swap(0, Ordering::Relaxed)),
+            peak: f32::from_bits(self.peak_bits[i].swap(0, Ordering::Relaxed)),
+            rms: f32::from_bits(self.rms_bits[i].swap(0, Ordering::Relaxed)),
             blocks: self.blocks.load(Ordering::Relaxed),
             non_silent_blocks: self.non_silent_blocks.load(Ordering::Relaxed),
         }
@@ -328,6 +348,15 @@ mod tests {
         assert_eq!(meter_position(-30.0, -60.0), 0.5);
         assert_eq!(meter_position(-90.0, -60.0), 0.0);
         assert_eq!(meter_position(6.0, -60.0), 1.0);
+    }
+
+    #[test]
+    fn level_cell_consumers_are_independent() {
+        let cell = LevelCell::default();
+        cell.push(&[0.5]);
+        assert_eq!(cell.take().peak, 0.5);
+        assert_eq!(cell.take_for(Consumer::Recorder).peak, 0.5, "UI read must not steal the recorder's peak");
+        assert_eq!(cell.take_for(Consumer::Recorder).peak, 0.0);
     }
 
     #[test]

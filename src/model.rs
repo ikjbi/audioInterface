@@ -91,6 +91,10 @@ pub struct Device {
     /// True when a Bluetooth device is in its low-quality "hands-free" /
     /// headset (HFP/HSP) mode, which is what happens when its mic is in use.
     pub hands_free: bool,
+    /// Other applications currently recording from (input) or playing to
+    /// (output) this device, as friendly names. Our own streams are excluded.
+    #[serde(default)]
+    pub in_use_by: Vec<String>,
 }
 
 impl Device {
@@ -150,6 +154,56 @@ pub fn resolve_device<'a>(devices: &'a [Device], direction: Direction, query: &s
     }
 }
 
+/// Turn a raw app identifier (bundle ID, executable path, PulseAudio
+/// application name) into something friendly, e.g. `com.microsoft.teams2` or
+/// `C:\...\ms-teams.exe` -> "Microsoft Teams".
+pub fn friendly_app_name(raw: &str) -> String {
+    let raw = raw.trim();
+    // Last path component, without extension.
+    let base = raw.rsplit(['\\', '/']).next().unwrap_or(raw);
+    let base = base.strip_suffix(".exe").or_else(|| base.strip_suffix(".EXE")).unwrap_or(base);
+    let lower = raw.to_lowercase();
+    const KNOWN: &[(&str, &str)] = &[
+        ("teams", "Microsoft Teams"),
+        ("zoom", "Zoom"),
+        ("slack", "Slack"),
+        ("discord", "Discord"),
+        ("webex", "Webex"),
+        ("skype", "Skype"),
+        ("facetime", "FaceTime"),
+        ("com.google.chrome", "Google Chrome"),
+        ("chrome", "Google Chrome"),
+        ("firefox", "Firefox"),
+        ("msedge", "Microsoft Edge"),
+        ("com.microsoft.edgemac", "Microsoft Edge"),
+        ("safari", "Safari"),
+        ("obsproject", "OBS"),
+        ("obs64", "OBS"),
+        ("audacity", "Audacity"),
+        ("signal", "Signal"),
+        ("whatsapp", "WhatsApp"),
+        ("telegram", "Telegram"),
+    ];
+    for (needle, name) in KNOWN {
+        if lower.contains(needle) {
+            return (*name).to_string();
+        }
+    }
+    // Bundle IDs: com.vendor.App -> App
+    if !raw.contains(['/', '\\']) && raw.matches('.').count() >= 2 {
+        return raw.rsplit('.').next().unwrap_or(raw).to_string();
+    }
+    base.to_string()
+}
+
+/// Extract the executable path from a Windows audio session identifier, e.g.
+/// `{0.0.1.00000000}.{guid}|\Device\HarddiskVolume3\...\ms-teams.exe%b{guid}`.
+pub fn exe_from_windows_session_id(id: &str) -> Option<String> {
+    let after = id.split_once('|')?.1;
+    let exe = after.split("%b").next()?.trim();
+    (!exe.is_empty()).then(|| exe.to_string())
+}
+
 #[cfg(test)]
 pub(crate) fn test_device(id: &str, name: &str, direction: Direction) -> Device {
     Device {
@@ -161,6 +215,7 @@ pub(crate) fn test_device(id: &str, name: &str, direction: Direction) -> Device 
         volume: Some(0.5),
         muted: Some(false),
         hands_free: false,
+        in_use_by: Vec::new(),
     }
 }
 
@@ -192,6 +247,29 @@ mod tests {
         let err = resolve_device(&d, Direction::Input, "micro").unwrap_err().to_string();
         assert!(err.contains("several"), "{err}");
         assert!(resolve_device(&d, Direction::Output, "usb").is_err());
+    }
+
+    #[test]
+    fn windows_session_ids() {
+        let id = r"{0.0.1.00000000}.{8b5bd1c5-46b5-4ae0-bb3d-1d1a3f6ed5b4}|\Device\HarddiskVolume3\Program Files\WindowsApps\MSTeams_24\ms-teams.exe%b{00000000-0000-0000-0000-000000000000}";
+        let exe = exe_from_windows_session_id(id).unwrap();
+        assert!(exe.ends_with("ms-teams.exe"), "{exe}");
+        assert_eq!(friendly_app_name(&exe), "Microsoft Teams");
+        assert_eq!(exe_from_windows_session_id("{0.0.1.00000000}.{guid}|#%b{guid}").as_deref(), Some("#"));
+        assert_eq!(exe_from_windows_session_id("no separator"), None);
+    }
+
+    #[test]
+    fn friendly_names() {
+        assert_eq!(friendly_app_name("com.microsoft.teams2"), "Microsoft Teams");
+        assert_eq!(
+            friendly_app_name(r"\Device\HarddiskVolume3\Program Files\WindowsApps\MSTeams_x64\ms-teams.exe"),
+            "Microsoft Teams"
+        );
+        assert_eq!(friendly_app_name("us.zoom.xos"), "Zoom");
+        assert_eq!(friendly_app_name("com.example.Recorder"), "Recorder");
+        assert_eq!(friendly_app_name(r"C:\Tools\mytool.exe"), "mytool");
+        assert_eq!(friendly_app_name("parecord"), "parecord");
     }
 
     #[test]
