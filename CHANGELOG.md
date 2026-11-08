@@ -65,6 +65,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   sudo-free build paths are tested in CI.
 
 ### Fixed
+- Test tones and mic-test playback could be cut off when the device requested a large buffer up
+  front (PulseAudio): the stream now lives until the delivered audio has played. Found by Linux CI.
 - Changing the volume keeps the left/right balance (macOS per-channel devices, Linux).
 - The CLI no longer panics when its output is piped into `head` and similar (SIGPIPE).
 - A meter blocked by OS microphone privacy (`Access is denied` on Windows) now explains why,

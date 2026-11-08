@@ -130,20 +130,31 @@ fn play(
     let rate = config.sample_rate;
     let source = Arc::new(Mutex::new(make_source(rate)));
     let finished = Arc::new(AtomicBool::new(false));
+    // Frames of real audio handed to the device so far.
+    let frames = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let stream = match supported.sample_format() {
-        SampleFormat::F32 => build_out::<f32>(device, config, channel, source, finished.clone()),
-        SampleFormat::I16 => build_out::<i16>(device, config, channel, source, finished.clone()),
-        SampleFormat::I32 => build_out::<i32>(device, config, channel, source, finished.clone()),
-        SampleFormat::U16 => build_out::<u16>(device, config, channel, source, finished.clone()),
-        SampleFormat::F64 => build_out::<f64>(device, config, channel, source, finished.clone()),
+        SampleFormat::F32 => build_out::<f32>(device, config, channel, source, finished.clone(), frames.clone()),
+        SampleFormat::I16 => build_out::<i16>(device, config, channel, source, finished.clone(), frames.clone()),
+        SampleFormat::I32 => build_out::<i32>(device, config, channel, source, finished.clone(), frames.clone()),
+        SampleFormat::U16 => build_out::<u16>(device, config, channel, source, finished.clone(), frames.clone()),
+        SampleFormat::F64 => build_out::<f64>(device, config, channel, source, finished.clone(), frames.clone()),
         other => Err(anyhow!("unsupported output format {other:?}")),
     }?;
+    let started = Instant::now();
     stream.play()?;
     while !finished.load(Ordering::SeqCst) && !handle.stopped() {
         std::thread::sleep(Duration::from_millis(20));
     }
-    // Let the device drain its buffer.
-    std::thread::sleep(Duration::from_millis(150));
+    // The device may have asked for a big buffer up front (PulseAudio does), so
+    // "all audio handed over" is not "all audio played". Keep the stream alive
+    // until the delivered audio has had time to play, plus a margin.
+    if !handle.stopped() {
+        let played_out = Duration::from_secs_f64(frames.load(Ordering::SeqCst) as f64 / rate.max(1) as f64);
+        let deadline = started + played_out + Duration::from_millis(300);
+        while Instant::now() < deadline && !handle.stopped() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
     Ok(())
 }
 
@@ -153,6 +164,7 @@ fn build_out<T>(
     channel: Channel,
     source: Arc<Mutex<Source>>,
     finished: Arc<AtomicBool>,
+    frames: Arc<std::sync::atomic::AtomicU64>,
 ) -> Result<cpal::Stream>
 where
     T: SizedSample + FromSample<f32> + Send + 'static,
@@ -164,7 +176,10 @@ where
             let mut src = source.lock().unwrap_or_else(|e| e.into_inner());
             for frame in out.chunks_mut(ch) {
                 let s = match src() {
-                    Some(s) => s,
+                    Some(s) => {
+                        frames.fetch_add(1, Ordering::Relaxed);
+                        s
+                    }
                     None => {
                         finished.store(true, Ordering::SeqCst);
                         0.0
