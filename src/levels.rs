@@ -9,11 +9,7 @@ pub const FLOOR_DB: f32 = -96.0;
 
 /// Convert a linear amplitude (0..=1, 1 = full scale) to dBFS.
 pub fn to_db(linear: f32) -> f32 {
-    if linear <= 0.0 || !linear.is_finite() {
-        FLOOR_DB
-    } else {
-        (20.0 * linear.log10()).max(FLOOR_DB)
-    }
+    if linear <= 0.0 || !linear.is_finite() { FLOOR_DB } else { (20.0 * linear.log10()).max(FLOOR_DB) }
 }
 
 /// Convert dBFS to linear amplitude.
@@ -23,9 +19,7 @@ pub fn from_db(db: f32) -> f32 {
 
 /// Peak absolute sample value of a block.
 pub fn peak(samples: &[f32]) -> f32 {
-    samples
-        .iter()
-        .fold(0.0f32, |m, s| if s.is_finite() { m.max(s.abs()) } else { m })
+    samples.iter().fold(0.0f32, |m, s| if s.is_finite() { m.max(s.abs()) } else { m })
 }
 
 /// Root-mean-square of a block.
@@ -216,11 +210,7 @@ impl MeterState {
         }
 
         self.status = if reading.blocks == 0 {
-            if now.duration_since(self.started) > LOST_AFTER * 2 {
-                SignalStatus::Lost
-            } else {
-                SignalStatus::Starting
-            }
+            if now.duration_since(self.started) > LOST_AFTER * 2 { SignalStatus::Lost } else { SignalStatus::Starting }
         } else if now.duration_since(self.last_blocks_change) > LOST_AFTER {
             SignalStatus::Lost
         } else if now.duration_since(self.last_non_silent_change) > SILENT_AFTER {
@@ -264,9 +254,8 @@ mod tests {
         // A full-scale square wave has RMS 1.
         assert!((rms(&[1.0, -1.0, 1.0, -1.0]) - 1.0).abs() < 1e-6);
         // A sine wave has RMS 1/sqrt(2).
-        let sine: Vec<f32> = (0..48_000)
-            .map(|i| (i as f32 * 2.0 * std::f32::consts::PI * 440.0 / 48_000.0).sin())
-            .collect();
+        let sine: Vec<f32> =
+            (0..48_000).map(|i| (i as f32 * 2.0 * std::f32::consts::PI * 440.0 / 48_000.0).sin()).collect();
         assert!((rms(&sine) - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-3);
     }
 

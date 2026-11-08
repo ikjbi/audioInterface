@@ -10,11 +10,13 @@ pub struct MockBackend {
     pub devices: Vec<Device>,
     /// Every mutating call, for assertions: e.g. `"set_default input b"`.
     pub calls: Vec<String>,
+    /// Produce animated fake meter levels (demo mode).
+    pub animate: bool,
 }
 
 impl MockBackend {
     pub fn new(devices: Vec<Device>) -> Self {
-        MockBackend { devices, calls: Vec::new() }
+        MockBackend { devices, calls: Vec::new(), animate: false }
     }
 
     /// A believable set of devices, including a Bluetooth headset.
@@ -76,6 +78,30 @@ impl AudioBackend for MockBackend {
         self.calls.push(format!("set_mute {direction} {id} {muted}"));
         Ok(())
     }
+
+    fn has_native_meter(&self, _direction: Direction) -> bool {
+        self.animate
+    }
+
+    /// Speech-like fake levels: a slow envelope with fast flicker, scaled by
+    /// volume, and silence when muted.
+    fn native_peak(&mut self, id: &str, direction: Direction) -> Option<f32> {
+        if !self.animate {
+            return None;
+        }
+        let d = self.devices.iter().find(|d| d.id == id && d.direction == direction)?;
+        if d.muted == Some(true) {
+            return Some(0.0);
+        }
+        let seed = id.bytes().fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32)) as f32;
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| (d.as_secs_f64() % 1000.0) as f32)
+            .unwrap_or(0.0);
+        let envelope = ((t * 0.9 + seed).sin() * 0.5 + 0.5).powi(2);
+        let flicker = (t * 23.0 + seed * 3.0).sin().abs() * 0.6 + 0.4;
+        Some((envelope * flicker * d.volume.unwrap_or(1.0)).clamp(0.0, 1.0))
+    }
 }
 
 #[cfg(test)]
@@ -86,13 +112,7 @@ mod tests {
     fn mock_set_default_is_exclusive() {
         let mut b = MockBackend::demo();
         b.set_default("usb-mic", Direction::Input).unwrap();
-        let defaults: Vec<_> = b
-            .devices()
-            .unwrap()
-            .into_iter()
-            .filter(|d| d.is_default)
-            .map(|d| d.id)
-            .collect();
+        let defaults: Vec<_> = b.devices().unwrap().into_iter().filter(|d| d.is_default).map(|d| d.id).collect();
         assert_eq!(defaults, vec!["usb-mic", "builtin-out"]);
         assert!(b.set_default("usb-mic", Direction::Output).is_err());
     }

@@ -43,6 +43,16 @@ pub trait AudioBackend {
     fn has_native_meter(&self, _direction: Direction) -> bool {
         false
     }
+
+    /// The `cpal` device ID to capture from to meter this device, if any.
+    /// For inputs that is the device itself. For outputs, a loopback/monitor
+    /// source where the OS has one (PulseAudio `*.monitor`).
+    fn capture_id(&self, id: &str, direction: Direction) -> Option<String> {
+        match direction {
+            Direction::Input => Some(id.to_string()),
+            Direction::Output => None,
+        }
+    }
 }
 
 /// Create the backend for the current OS.

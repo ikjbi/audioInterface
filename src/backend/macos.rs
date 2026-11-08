@@ -128,9 +128,8 @@ fn settable(id: AudioObjectID, a: &AudioObjectPropertyAddress) -> bool {
 fn get<T: Copy + Default>(id: AudioObjectID, a: &AudioObjectPropertyAddress) -> Result<T> {
     let mut value = T::default();
     let mut size = size_of::<T>() as u32;
-    let st = unsafe {
-        AudioObjectGetPropertyData(id, a, 0, ptr::null(), &mut size, &mut value as *mut T as *mut c_void)
-    };
+    let st =
+        unsafe { AudioObjectGetPropertyData(id, a, 0, ptr::null(), &mut size, &mut value as *mut T as *mut c_void) };
     check(st, "GetPropertyData")?;
     Ok(value)
 }
@@ -144,10 +143,7 @@ fn set<T: Copy>(id: AudioObjectID, a: &AudioObjectPropertyAddress, value: T) -> 
 
 fn data_size(id: AudioObjectID, a: &AudioObjectPropertyAddress) -> Result<u32> {
     let mut size = 0u32;
-    check(
-        unsafe { AudioObjectGetPropertyDataSize(id, a, 0, ptr::null(), &mut size) },
-        "GetPropertyDataSize",
-    )?;
+    check(unsafe { AudioObjectGetPropertyDataSize(id, a, 0, ptr::null(), &mut size) }, "GetPropertyDataSize")?;
     Ok(size)
 }
 
@@ -174,7 +170,7 @@ fn get_string(id: AudioObjectID, a: &AudioObjectPropertyAddress) -> Result<Strin
     if cf.is_null() {
         bail!("null CFString");
     }
-    let result = unsafe {
+    unsafe {
         let len = CFStringGetLength(cf);
         let cap = CFStringGetMaximumSizeForEncoding(len, K_CF_STRING_ENCODING_UTF8) + 1;
         let mut buf = vec![0u8; cap.max(1) as usize];
@@ -186,8 +182,7 @@ fn get_string(id: AudioObjectID, a: &AudioObjectPropertyAddress) -> Result<Strin
             let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
             Ok(String::from_utf8_lossy(&buf[..end]).into_owned())
         }
-    };
-    result
+    }
 }
 
 fn transport_of(code: u32) -> Transport {
@@ -213,10 +208,7 @@ fn volume_elements(id: AudioObjectID, direction: Direction) -> Vec<u32> {
         return vec![ELEMENT_MAIN];
     }
     let stereo = get::<[u32; 2]>(id, &addr(DEV_STEREO_CHANNELS, scope, ELEMENT_MAIN)).unwrap_or([1, 2]);
-    let mut chans: Vec<u32> = stereo
-        .into_iter()
-        .filter(|&c| has(id, &addr(DEV_VOLUME_SCALAR, scope, c)))
-        .collect();
+    let mut chans: Vec<u32> = stereo.into_iter().filter(|&c| has(id, &addr(DEV_VOLUME_SCALAR, scope, c))).collect();
     chans.dedup();
     chans
 }
@@ -237,9 +229,7 @@ impl CoreAudioBackend {
             Direction::Input => HW_DEFAULT_INPUT,
             Direction::Output => HW_DEFAULT_OUTPUT,
         };
-        get::<AudioObjectID>(SYSTEM_OBJECT, &addr(sel, SCOPE_GLOBAL, ELEMENT_MAIN))
-            .ok()
-            .filter(|&id| id != 0)
+        get::<AudioObjectID>(SYSTEM_OBJECT, &addr(sel, SCOPE_GLOBAL, ELEMENT_MAIN)).ok().filter(|&id| id != 0)
     }
 
     fn has_streams(&self, id: AudioObjectID, direction: Direction) -> bool {
@@ -259,15 +249,9 @@ impl CoreAudioBackend {
     fn read_volume(&self, id: AudioObjectID, direction: Direction) -> Option<f32> {
         let scope = scope_of(direction);
         let elems = volume_elements(id, direction);
-        let vals: Vec<f32> = elems
-            .iter()
-            .filter_map(|&e| get::<f32>(id, &addr(DEV_VOLUME_SCALAR, scope, e)).ok())
-            .collect();
-        if vals.is_empty() {
-            None
-        } else {
-            Some(vals.iter().sum::<f32>() / vals.len() as f32)
-        }
+        let vals: Vec<f32> =
+            elems.iter().filter_map(|&e| get::<f32>(id, &addr(DEV_VOLUME_SCALAR, scope, e)).ok()).collect();
+        if vals.is_empty() { None } else { Some(vals.iter().sum::<f32>() / vals.len() as f32) }
     }
 
     fn read_mute(&self, id: AudioObjectID, direction: Direction) -> Option<bool> {
@@ -287,7 +271,9 @@ impl CoreAudioBackend {
         let hands_free = transport == Transport::Bluetooth
             && get::<f64>(id, &addr(DEV_NOMINAL_RATE, SCOPE_GLOBAL, ELEMENT_MAIN))
                 .map(|r| r > 0.0 && r <= 24_000.0)
-                .unwrap_or_else(|_| bluetooth::is_hands_free(transport, &bluetooth::Hints { name: &name, ..Default::default() }));
+                .unwrap_or_else(|_| {
+                    bluetooth::is_hands_free(transport, &bluetooth::Hints { name: &name, ..Default::default() })
+                });
         Some(Device {
             id: uid,
             name,

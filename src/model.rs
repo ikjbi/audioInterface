@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Whether a device records (input / microphone) or plays (output / speakers).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Direction {
     Input,
@@ -95,10 +95,7 @@ pub struct Device {
 
 impl Device {
     pub fn key(&self) -> DeviceKey {
-        DeviceKey {
-            id: self.id.clone(),
-            direction: self.direction,
-        }
+        DeviceKey { id: self.id.clone(), direction: self.direction }
     }
 }
 
@@ -120,29 +117,20 @@ pub struct DeviceRef {
 
 impl DeviceRef {
     pub fn of(device: &Device) -> Self {
-        DeviceRef {
-            id: device.id.clone(),
-            name: device.name.clone(),
-        }
+        DeviceRef { id: device.id.clone(), name: device.name.clone() }
     }
 
     /// Find the device this reference points to: exact ID first, then name.
     pub fn find<'a>(&self, devices: &'a [Device], direction: Direction) -> Option<&'a Device> {
         let candidates = || devices.iter().filter(move |d| d.direction == direction);
-        candidates()
-            .find(|d| d.id == self.id)
-            .or_else(|| candidates().find(|d| d.name == self.name))
+        candidates().find(|d| d.id == self.id).or_else(|| candidates().find(|d| d.name == self.name))
     }
 }
 
 /// Resolve a user-supplied string (from the CLI) to a device: exact ID, exact
 /// name, then case-insensitive substring of the name. Errors if the substring
 /// matches several devices.
-pub fn resolve_device<'a>(
-    devices: &'a [Device],
-    direction: Direction,
-    query: &str,
-) -> anyhow::Result<&'a Device> {
+pub fn resolve_device<'a>(devices: &'a [Device], direction: Direction, query: &str) -> anyhow::Result<&'a Device> {
     let in_dir: Vec<&Device> = devices.iter().filter(|d| d.direction == direction).collect();
     if let Some(d) = in_dir.iter().find(|d| d.id == query) {
         return Ok(d);
@@ -151,19 +139,13 @@ pub fn resolve_device<'a>(
         return Ok(d);
     }
     let q = query.to_lowercase();
-    let matches: Vec<&&Device> = in_dir
-        .iter()
-        .filter(|d| d.name.to_lowercase().contains(&q))
-        .collect();
+    let matches: Vec<&&Device> = in_dir.iter().filter(|d| d.name.to_lowercase().contains(&q)).collect();
     match matches.as_slice() {
         [one] => Ok(one),
         [] => anyhow::bail!("no {direction} device matches \"{query}\""),
         many => anyhow::bail!(
             "\"{query}\" matches several {direction} devices: {}",
-            many.iter()
-                .map(|d| format!("\"{}\"", d.name))
-                .collect::<Vec<_>>()
-                .join(", ")
+            many.iter().map(|d| format!("\"{}\"", d.name)).collect::<Vec<_>>().join(", ")
         ),
     }
 }

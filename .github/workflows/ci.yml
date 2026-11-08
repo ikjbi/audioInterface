@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: Build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libasound2-dev \
+            libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libgl1-mesa-dev libegl1-mesa-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Unit tests
+        run: cargo test --locked
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: CLI smoke test (mock backend)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          BIN=target/debug/audio-interface
+          $BIN --version
+          $BIN --mock list
+          $BIN --mock list --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert len(d)==6, d'
+          $BIN --mock set-default input "usb mic"
+          $BIN --mock volume output "LG" 30
+          $BIN --mock meter --seconds 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audio-interface-${{ runner.os }}-debug
+          path: |
+            target/debug/audio-interface
+            target/debug/audio-interface.exe
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Exercise the real Linux backend against a real PulseAudio server with
+  # virtual devices: a sine-wave source (a fake mic) and two null sinks.
+  linux-pulseaudio:
+    name: Linux PulseAudio integration
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libxkbcommon-dev \
+            libwayland-dev libx11-dev pulseaudio pulseaudio-utils
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked
+      - name: Start PulseAudio with virtual devices
+        run: |
+          pulseaudio --start --exit-idle-time=-1 --log-target=stderr
+          sleep 1
+          pactl load-module module-null-sink sink_name=ci_speakers sink_properties=device.description=CI_Speakers
+          pactl load-module module-null-sink sink_name=ci_headphones sink_properties=device.description=CI_Headphones
+          pactl load-module module-sine-source source_name=ci_sine_mic rate=48000 frequency=440
+          pactl info
+      - name: Integration test
+        run: bash scripts/ci-linux-pulse.sh target/debug/audio-interface

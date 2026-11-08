@@ -48,7 +48,11 @@ pub fn guess_transport(h: &Hints) -> Transport {
         Transport::Hdmi
     } else if name.contains("usb") {
         Transport::Usb
-    } else if name.contains("virtual") || name.contains("cable") || name.contains("blackhole") || name.contains("loopback") {
+    } else if name.contains("virtual")
+        || name.contains("cable")
+        || name.contains("blackhole")
+        || name.contains("loopback")
+    {
         Transport::Virtual
     } else {
         Transport::Unknown
@@ -67,7 +71,11 @@ pub fn is_hands_free(transport: Transport, h: &Hints) -> bool {
     }
     if let Some(p) = h.profile {
         let p = p.to_ascii_lowercase();
-        return p.contains("hfp") || p.contains("hsp") || p.contains("headset") || p.contains("handsfree") || p.contains("hands-free");
+        return p.contains("hfp")
+            || p.contains("hsp")
+            || p.contains("headset")
+            || p.contains("handsfree")
+            || p.contains("hands-free");
     }
     let name = h.name.to_ascii_lowercase();
     name.contains("hands-free") || name.contains("handsfree") || name.contains("headset head unit")
@@ -116,7 +124,8 @@ mod tests {
         assert_eq!(t, Transport::Bluetooth);
         assert!(is_hands_free(t, &src));
 
-        let sink = Hints { name: "WH-1000XM4", bus: Some("bluetooth"), profile: Some("a2dp-sink"), ..Default::default() };
+        let sink =
+            Hints { name: "WH-1000XM4", bus: Some("bluetooth"), profile: Some("a2dp-sink"), ..Default::default() };
         assert!(!is_hands_free(Transport::Bluetooth, &sink));
     }
 
