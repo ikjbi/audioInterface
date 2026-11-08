@@ -156,3 +156,13 @@ pavucontrol (Linux). Ordered by value. Platform limits are noted where an OS has
 - **00:15** Linux CI found that recorded RMS was diluted by service ticks with no new audio
   block. Fixed with exact per-sample energy accumulation. New icon, Windows exe icon, splash
   screen, and the no-admin install guide with CI jobs that prove the sudo-free build paths.
+- **00:30–01:00** Phase 11 (professional features), each committed separately:
+  - profiles; start at login; rename/hide devices; Windows communications device
+  - notifications, including "mic gain lowered by another app"; global hotkeys; tray (Windows/macOS)
+  - test tools (tone, mic test, monitoring); spectrum analyzer; noise floor, SNR, clips
+  - format info and sample rate (verified 44.1 → 48 → 44.1 kHz on the Mac mic); L/R balance
+  - Linux card profiles; theme; single instance (verified the second launch hands over)
+  - diagnostics; settings import/export; EBU R128 LUFS (matches the EBU −3.01 LUFS reference);
+    per-app mixer
+- Linux CI caught a real bug: test tones were cut off when PulseAudio took the whole tone into a
+  large buffer up front. Fixed by keeping the stream alive until the delivered frames have played.
