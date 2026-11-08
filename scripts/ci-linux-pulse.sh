@@ -40,6 +40,17 @@ $BIN volume input ci_sine_mic 75
 pactl get-source-volume ci_sine_mic | grep -q " 75%" || { pactl get-source-volume ci_sine_mic; fail "source volume not 75%"; }
 $BIN volume input ci_sine_mic 100
 
+step "balance"
+$BIN volume output ci_speakers 80
+$BIN balance ci_speakers -0.5 | tee bal.txt
+grep -q "balance -0.50" bal.txt || fail "balance readback"
+pactl get-sink-volume ci_speakers | tee vol.txt
+grep -q "front-left: .* 80%" vol.txt || fail "left channel should stay at 80%"
+grep -q "front-right: .* 40%" vol.txt || fail "right channel should be at 40%"
+$BIN volume output ci_speakers 60   # changing volume keeps the balance
+pactl get-sink-volume ci_speakers | grep -q "front-right: .* 30%" || { pactl get-sink-volume ci_speakers; fail "balance not kept on volume change"; }
+$BIN balance ci_speakers 0
+
 step "mute"
 $BIN mute output ci_speakers on
 pactl get-sink-mute ci_speakers | grep -q yes || fail "not muted"

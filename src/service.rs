@@ -33,6 +33,8 @@ pub enum Request {
     SetDefault(DeviceKey),
     /// Windows: make this the default communications device only.
     SetCommsDefault(DeviceKey),
+    /// Left/right balance (-1 ..= 1).
+    SetBalance(DeviceKey, f32),
     /// Change a device's sample rate (macOS).
     SetSampleRate(DeviceKey, u32),
     /// Toggle mute on the default device of a direction (hotkey / tray).
@@ -384,6 +386,7 @@ impl Worker {
         let name = match &req {
             Request::SetDefault(k)
             | Request::SetSampleRate(k, _)
+            | Request::SetBalance(k, _)
             | Request::SetCommsDefault(k)
             | Request::SetVolume(k, _)
             | Request::SetMute(k, _) => self.name_of(k),
@@ -394,6 +397,7 @@ impl Worker {
             Request::SetDefault(k) => {
                 backend.set_default(&k.id, k.direction).map(|_| format!("Default {} set to {name}", k.direction))
             }
+            Request::SetBalance(k, b) => backend.set_balance(&k.id, k.direction, *b).map(|_| String::new()),
             Request::SetSampleRate(k, rate) => backend
                 .set_sample_rate(&k.id, k.direction, *rate)
                 .map(|_| format!("{name} sample rate set to {rate} Hz")),

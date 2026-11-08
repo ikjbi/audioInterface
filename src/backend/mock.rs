@@ -34,6 +34,7 @@ impl MockBackend {
             is_comms_default: false,
             sample_rate: None,
             channels: None,
+            balance: None,
         };
         MockBackend::new(vec![
             dev("builtin-mic", "Built-in Microphone", Direction::Input, Transport::BuiltIn, true, false),

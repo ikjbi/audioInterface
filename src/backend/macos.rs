@@ -7,7 +7,7 @@
 use super::{AudioBackend, clamp_volume};
 use crate::bluetooth;
 use crate::model::{Device, Direction, Transport};
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void};
 use std::ptr;
@@ -249,6 +249,14 @@ fn transport_of(code: u32) -> Transport {
     }
 }
 
+/// Left/right per-channel volume elements, if the device has them.
+fn stereo_elements(id: AudioObjectID, direction: Direction) -> Option<[u32; 2]> {
+    let scope = scope_of(direction);
+    let [l, r] = get::<[u32; 2]>(id, &addr(DEV_STEREO_CHANNELS, scope, ELEMENT_MAIN)).unwrap_or([1, 2]);
+    (l != r && settable(id, &addr(DEV_VOLUME_SCALAR, scope, l)) && settable(id, &addr(DEV_VOLUME_SCALAR, scope, r)))
+        .then_some([l, r])
+}
+
 /// Channels to use for volume/mute when the device has no main-element control.
 fn volume_elements(id: AudioObjectID, direction: Direction) -> Vec<u32> {
     let scope = scope_of(direction);
@@ -378,9 +386,16 @@ impl CoreAudioBackend {
                     .sum::<u16>()
             })
             .filter(|&c| c > 0);
+        let balance = stereo_elements(id, direction).and_then(|[l, r]| {
+            let scope = scope_of(direction);
+            let lv = get::<f32>(id, &addr(DEV_VOLUME_SCALAR, scope, l)).ok()?;
+            let rv = get::<f32>(id, &addr(DEV_VOLUME_SCALAR, scope, r)).ok()?;
+            Some(crate::model::balance_from(lv, rv))
+        });
         Some(Device {
             sample_rate,
             channels,
+            balance,
             id: uid,
             name,
             direction,
@@ -457,10 +472,25 @@ impl AudioBackend for CoreAudioBackend {
             bail!("this device has no adjustable {direction} volume");
         }
         let v = clamp_volume(volume);
-        for e in elems {
-            set(id, &addr(DEV_VOLUME_SCALAR, scope, e), v)?;
+        // Per-channel controls: scale them together so the balance is kept.
+        let current: Vec<f32> =
+            elems.iter().map(|&e| get::<f32>(id, &addr(DEV_VOLUME_SCALAR, scope, e)).unwrap_or(v)).collect();
+        let targets = if elems == [ELEMENT_MAIN] { vec![v] } else { crate::model::scale_channels(&current, v) };
+        for (e, t) in elems.into_iter().zip(targets) {
+            set(id, &addr(DEV_VOLUME_SCALAR, scope, e), t)?;
         }
         Ok(())
+    }
+
+    fn set_balance(&mut self, uid: &str, direction: Direction, balance: f32) -> Result<()> {
+        let id = self.object_for_uid(uid)?;
+        let [l, r] = stereo_elements(id, direction).context("this device has no per-channel volume")?;
+        let scope = scope_of(direction);
+        let lv = get::<f32>(id, &addr(DEV_VOLUME_SCALAR, scope, l))?;
+        let rv = get::<f32>(id, &addr(DEV_VOLUME_SCALAR, scope, r))?;
+        let (nl, nr) = crate::model::channel_gains(lv.max(rv), balance);
+        set(id, &addr(DEV_VOLUME_SCALAR, scope, l), nl)?;
+        set(id, &addr(DEV_VOLUME_SCALAR, scope, r), nr)
     }
 
     fn sample_rates(&mut self, uid: &str, _direction: Direction) -> Vec<u32> {

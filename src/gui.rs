@@ -577,6 +577,38 @@ impl App {
                 }
             });
 
+            // Balance (stereo outputs with per-channel volume).
+            if d.direction == Direction::Output
+                && let Some(bal) = d.balance
+            {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("L").small().color(MUTED_TEXT));
+                    let mut b = bal;
+                    ui.spacing_mut().slider_width = 120.0;
+                    let resp = ui
+                        .add(egui::Slider::new(&mut b, -1.0..=1.0).show_value(false))
+                        .on_hover_text("Balance (double-click to centre)");
+                    if resp.double_clicked() {
+                        b = 0.0;
+                    }
+                    if resp.changed() || resp.double_clicked() {
+                        // Snap to centre near zero.
+                        if b.abs() < 0.04 {
+                            b = 0.0;
+                        }
+                        self.service.send(Request::SetBalance(key.clone(), b));
+                    }
+                    ui.label(RichText::new("R").small().color(MUTED_TEXT));
+                    if bal.abs() > 0.01 {
+                        ui.label(
+                            RichText::new(format!("{:.0}% {}", bal.abs() * 100.0, if bal < 0.0 { "left" } else { "right" }))
+                                .small()
+                                .color(MUTED_TEXT),
+                        );
+                    }
+                });
+            }
+
             // Running test tools.
             self.tools_row(ui, &key);
 

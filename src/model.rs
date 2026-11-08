@@ -105,6 +105,29 @@ pub struct Device {
     /// Channel count, if known.
     #[serde(default)]
     pub channels: Option<u16>,
+    /// Left/right balance, -1 (left) ..= 1 (right), for stereo devices with
+    /// per-channel volume.
+    #[serde(default)]
+    pub balance: Option<f32>,
+}
+
+/// Balance from left/right channel volumes: -1 = only left, 0 = centred, 1 = only right.
+pub fn balance_from(left: f32, right: f32) -> f32 {
+    let m = left.max(right);
+    if m <= 0.0 { 0.0 } else { ((right - left) / m).clamp(-1.0, 1.0) }
+}
+
+/// Left/right volumes for a master volume and balance (the louder side gets the master).
+pub fn channel_gains(master: f32, balance: f32) -> (f32, f32) {
+    let b = balance.clamp(-1.0, 1.0);
+    (master * (1.0 - b.max(0.0)), master * (1.0 + b.min(0.0)))
+}
+
+/// Scale per-channel volumes so the loudest becomes `master`, keeping their ratios
+/// (i.e. keeping the balance).
+pub fn scale_channels(current: &[f32], master: f32) -> Vec<f32> {
+    let m = current.iter().copied().fold(0.0f32, f32::max);
+    if m <= 0.0 { vec![master; current.len()] } else { current.iter().map(|c| c / m * master).collect() }
 }
 
 impl Device {
@@ -245,6 +268,7 @@ pub(crate) fn test_device(id: &str, name: &str, direction: Direction) -> Device 
         is_comms_default: false,
         sample_rate: None,
         channels: None,
+        balance: None,
     }
 }
 
@@ -276,6 +300,21 @@ mod tests {
         let err = resolve_device(&d, Direction::Input, "micro").unwrap_err().to_string();
         assert!(err.contains("several"), "{err}");
         assert!(resolve_device(&d, Direction::Output, "usb").is_err());
+    }
+
+    #[test]
+    fn balance_math() {
+        assert_eq!(balance_from(0.8, 0.8), 0.0);
+        assert!((balance_from(0.8, 0.4) - -0.5).abs() < 1e-6);
+        assert_eq!(balance_from(0.0, 0.5), 1.0);
+        assert_eq!(balance_from(0.0, 0.0), 0.0);
+        assert_eq!(channel_gains(0.8, 0.0), (0.8, 0.8));
+        assert_eq!(channel_gains(0.8, -0.5), (0.8, 0.4));
+        assert_eq!(channel_gains(0.8, 1.0), (0.0, 0.8));
+        let (l, r) = channel_gains(0.6, 0.25);
+        assert!((balance_from(l, r) - 0.25).abs() < 1e-6, "round trip");
+        assert_eq!(scale_channels(&[0.8, 0.4], 0.5), vec![0.5, 0.25]);
+        assert_eq!(scale_channels(&[0.0, 0.0], 0.5), vec![0.5, 0.5]);
     }
 
     #[test]

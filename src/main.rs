@@ -121,6 +121,12 @@ enum Cmd {
         /// New rate in Hz, e.g. 48000.
         rate: Option<u32>,
     },
+    /// Show or set an output's left/right balance (-1 = left, 0 = centre, 1 = right).
+    Balance {
+        device: String,
+        #[arg(allow_hyphen_values = true)]
+        balance: Option<f32>,
+    },
     /// Play a short test tone on an output (default: the default output).
     TestTone {
         device: Option<String>,
@@ -318,6 +324,20 @@ fn run(cli: Cli) -> Result<()> {
                 } else {
                     println!("available: {}", rates.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(", "));
                 }
+            }
+            Ok(())
+        }
+        Cmd::Balance { device, balance } => {
+            let mut b = make_backend(mock)?;
+            let devices = b.devices()?;
+            let d = resolve_device(&devices, Direction::Output, &device)?.clone();
+            if let Some(v) = balance {
+                b.set_balance(&d.id, Direction::Output, v)?;
+            }
+            let now = b.devices()?.into_iter().find(|x| x.key() == d.key()).and_then(|x| x.balance);
+            match now {
+                Some(v) => println!("{}: balance {v:+.2}", d.name),
+                None => println!("{}: no balance control", d.name),
             }
             Ok(())
         }

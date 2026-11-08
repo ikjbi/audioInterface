@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Left/right balance** for stereo outputs with per-channel volume (Windows, macOS, Linux): slider
+  on the device card, `balance <device> <-1..1>` in the CLI.
 - **Device format**: sample rate and channel count on every device (GUI, `list`, JSON). On macOS
   the sample rate can be changed (device menu, `sample-rate` command).
 - **Spectrum analyzer** (📊 on capture-metered devices): 48 log-spaced bands from 20 Hz to 20 kHz,
@@ -53,6 +55,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   sudo-free build paths are tested in CI.
 
 ### Fixed
+- Changing the volume keeps the left/right balance (macOS per-channel devices, Linux).
 - The CLI no longer panics when its output is piped into `head` and similar (SIGPIPE).
 - A meter blocked by OS microphone privacy (`Access is denied` on Windows) now explains why,
   and the GUI offers an "Open privacy settings" button (macOS and Windows).

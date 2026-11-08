@@ -48,6 +48,11 @@ pub trait AudioBackend {
         anyhow::bail!("changing the sample rate is not supported on this OS")
     }
 
+    /// Set the left/right balance (-1 ..= 1) of a stereo device.
+    fn set_balance(&mut self, _id: &str, _direction: Direction, _balance: f32) -> Result<()> {
+        anyhow::bail!("balance is not supported for this device")
+    }
+
     /// Set volume/gain as a scalar in `0.0..=1.0`.
     fn set_volume(&mut self, id: &str, direction: Direction, volume: f32) -> Result<()>;
 

@@ -241,6 +241,14 @@ impl AudioBackend for WasapiBackend {
                 let ev = unsafe { dev.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) }.ok();
                 let volume = ev.as_ref().and_then(|e| unsafe { e.GetMasterVolumeLevelScalar() }.ok());
                 let muted = ev.as_ref().and_then(|e| unsafe { e.GetMute() }.ok()).map(|b| b.as_bool());
+                let balance = ev.as_ref().and_then(|e| unsafe {
+                    if e.GetChannelCount().ok()? < 2 {
+                        return None;
+                    }
+                    let l = e.GetChannelVolumeLevelScalar(0).ok()?;
+                    let r = e.GetChannelVolumeLevelScalar(1).ok()?;
+                    Some(crate::model::balance_from(l, r))
+                });
 
                 let is_comms_default = comms_default.as_deref() == Some(id.as_str());
                 let fmt = match self.formats.get(&id) {
@@ -262,6 +270,7 @@ impl AudioBackend for WasapiBackend {
                     hands_free,
                     in_use_by: session_users(&dev),
                     is_comms_default,
+                    balance,
                     sample_rate: fmt.map(|f| f.0),
                     channels: fmt.map(|f| f.1),
                 });
@@ -287,6 +296,21 @@ impl AudioBackend for WasapiBackend {
     fn set_volume(&mut self, id: &str, _direction: Direction, volume: f32) -> Result<()> {
         let ev = self.endpoint_volume(id)?;
         unsafe { ev.SetMasterVolumeLevelScalar(clamp_volume(volume), std::ptr::null())? };
+        Ok(())
+    }
+
+    fn set_balance(&mut self, id: &str, _direction: Direction, balance: f32) -> Result<()> {
+        let ev = self.endpoint_volume(id)?;
+        unsafe {
+            if ev.GetChannelCount()? < 2 {
+                return Err(anyhow!("this device is mono"));
+            }
+            let l = ev.GetChannelVolumeLevelScalar(0)?;
+            let r = ev.GetChannelVolumeLevelScalar(1)?;
+            let (nl, nr) = crate::model::channel_gains(l.max(r), balance);
+            ev.SetChannelVolumeLevelScalar(0, nl, std::ptr::null())?;
+            ev.SetChannelVolumeLevelScalar(1, nr, std::ptr::null())?;
+        }
         Ok(())
     }
 

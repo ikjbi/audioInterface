@@ -91,20 +91,30 @@ fn volume_scalar(cv: &protocol::ChannelVolume) -> Option<f32> {
 }
 
 fn channel_volume(channels: usize, scalar: f32) -> protocol::ChannelVolume {
-    let raw = (clamp_volume(scalar) as f64 * protocol::Volume::NORM.as_u32() as f64).round() as u32;
+    channel_volume_values(&vec![scalar; channels.max(1)])
+}
+
+/// Per-channel volumes (scalars) as a PulseAudio `ChannelVolume`.
+fn channel_volume_values(values: &[f32]) -> protocol::ChannelVolume {
     let mut cv = protocol::ChannelVolume::empty();
-    for _ in 0..channels.max(1) {
+    for v in values {
+        let raw = (clamp_volume(*v) as f64 * protocol::Volume::NORM.as_u32() as f64).round() as u32;
         cv.push(protocol::Volume::from_u32_clamped(raw));
     }
     cv
+}
+
+fn channel_scalars(cv: &protocol::ChannelVolume) -> Vec<f32> {
+    let norm = protocol::Volume::NORM.as_u32() as f32;
+    cv.channels().iter().map(|v| (v.as_u32() as f32 / norm).clamp(0.0, 1.0)).collect()
 }
 
 pub struct PulseBackend {
     conn: Option<Conn>,
     /// Sink name -> its monitor source name (used to meter outputs).
     monitors: HashMap<String, String>,
-    /// (name, direction) -> channel count, for building volume structs.
-    channels: HashMap<(String, Direction), usize>,
+    /// (name, direction) -> current per-channel volumes, for building volume structs.
+    channels: HashMap<(String, Direction), Vec<f32>>,
 }
 
 impl PulseBackend {
@@ -130,7 +140,7 @@ impl PulseBackend {
     }
 
     fn channels_for(&self, id: &str, direction: Direction) -> usize {
-        self.channels.get(&(id.to_string(), direction)).copied().unwrap_or(2)
+        self.channels.get(&(id.to_string(), direction)).map(|v| v.len()).unwrap_or(2)
     }
 }
 
@@ -232,6 +242,7 @@ impl AudioBackend for PulseBackend {
                 is_comms_default: false,
                 sample_rate: None,
                 channels: None,
+                balance: None,
             });
         };
 
@@ -240,7 +251,7 @@ impl AudioBackend for PulseBackend {
             if let Some(m) = &s.monitor_source_name {
                 self.monitors.insert(name.clone(), cstr(m));
             }
-            self.channels.insert((name.clone(), Direction::Output), s.cvolume.channels().len());
+            self.channels.insert((name.clone(), Direction::Output), channel_scalars(&s.cvolume));
             let is_default = default_sink.as_deref() == Some(name.as_str());
             push(
                 &mut out,
@@ -257,6 +268,8 @@ impl AudioBackend for PulseBackend {
                 last.in_use_by = sink_users.remove(&s.index).unwrap_or_default();
                 last.sample_rate = Some(s.sample_spec.sample_rate);
                 last.channels = Some(s.sample_spec.channels as u16);
+                let ch = channel_scalars(&s.cvolume);
+                last.balance = (ch.len() == 2).then(|| crate::model::balance_from(ch[0], ch[1]));
             }
         }
         for s in &sources {
@@ -265,7 +278,7 @@ impl AudioBackend for PulseBackend {
                 continue;
             }
             let name = cstr(&s.name);
-            self.channels.insert((name.clone(), Direction::Input), s.cvolume.channels().len());
+            self.channels.insert((name.clone(), Direction::Input), channel_scalars(&s.cvolume));
             let is_default = default_source.as_deref() == Some(name.as_str());
             push(
                 &mut out,
@@ -282,6 +295,8 @@ impl AudioBackend for PulseBackend {
                 last.in_use_by = source_users.remove(&s.index).unwrap_or_default();
                 last.sample_rate = Some(s.sample_spec.sample_rate);
                 last.channels = Some(s.sample_spec.channels as u16);
+                let ch = channel_scalars(&s.cvolume);
+                last.balance = (ch.len() == 2).then(|| crate::model::balance_from(ch[0], ch[1]));
             }
         }
         Ok(out)
@@ -303,10 +318,34 @@ impl AudioBackend for PulseBackend {
         if self.channels.is_empty() {
             self.devices()?;
         }
+        // Keep per-channel ratios (the balance) when changing the volume.
+        let volume = match self.channels.get(&(id.to_string(), direction)) {
+            Some(cur) if cur.len() > 1 => {
+                channel_volume_values(&crate::model::scale_channels(cur, clamp_volume(volume)))
+            }
+            _ => channel_volume(self.channels_for(id, direction), volume),
+        };
+        let params =
+            protocol::SetDeviceVolumeParams { device_index: None, device_name: Some(CString::new(id)?), volume };
+        self.with_conn(|c| match direction {
+            Direction::Output => c.ack(Command::SetSinkVolume(params.clone())),
+            Direction::Input => c.ack(Command::SetSourceVolume(params.clone())),
+        })
+    }
+
+    fn set_balance(&mut self, id: &str, direction: Direction, balance: f32) -> Result<()> {
+        if self.channels.is_empty() {
+            self.devices()?;
+        }
+        let cur = self.channels.get(&(id.to_string(), direction)).cloned().unwrap_or_default();
+        if cur.len() != 2 {
+            bail!("balance needs a stereo device");
+        }
+        let (l, r) = crate::model::channel_gains(cur[0].max(cur[1]), balance);
         let params = protocol::SetDeviceVolumeParams {
             device_index: None,
             device_name: Some(CString::new(id)?),
-            volume: channel_volume(self.channels_for(id, direction), volume),
+            volume: channel_volume_values(&[l, r]),
         };
         self.with_conn(|c| match direction {
             Direction::Output => c.ack(Command::SetSinkVolume(params.clone())),
