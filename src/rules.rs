@@ -3,7 +3,7 @@
 
 use crate::model::{Device, DeviceKey, Direction};
 use crate::settings::Settings;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 /// Volume difference below which we consider a gain lock "held".
 pub const GAIN_TOLERANCE: f32 = 0.01;
@@ -31,6 +31,50 @@ pub fn gain_corrections(devices: &[Device], settings: &Settings) -> Vec<GainCorr
             })
         })
         .collect()
+}
+
+/// Gain-lock enforcement that copes with devices whose volume moves in steps.
+///
+/// Some hardware (many USB and Bluetooth devices on macOS) only accepts
+/// discrete steps. Asked for 73% it settles on 75%. Without care we would
+/// "restore" it every refresh forever. After a correction we check what the
+/// device actually took. If that differs from the lock, it becomes the
+/// accepted value for that lock.
+#[derive(Default, Debug)]
+pub struct GainLocker {
+    /// key -> (locked value, value the device actually holds for it)
+    settled: HashMap<DeviceKey, (f32, f32)>,
+}
+
+impl GainLocker {
+    /// Corrections to apply now.
+    pub fn corrections(&mut self, devices: &[Device], settings: &Settings) -> Vec<GainCorrection> {
+        gain_corrections(devices, settings)
+            .into_iter()
+            .filter(|c| match self.settled.get(&c.key) {
+                Some(&(lock, actual)) if (lock - c.to).abs() <= f32::EPSILON => {
+                    (c.from - actual).abs() > GAIN_TOLERANCE
+                }
+                _ => true,
+            })
+            .collect()
+    }
+
+    /// Call with the device list re-read after applying `applied`. Returns the
+    /// corrections the device could not hold exactly, with the value it settled on.
+    pub fn observe(&mut self, applied: &[GainCorrection], after: &[Device]) -> Vec<(GainCorrection, f32)> {
+        let mut quantized = Vec::new();
+        for c in applied {
+            let Some(now) = after.iter().find(|d| d.key() == c.key).and_then(|d| d.volume) else { continue };
+            if (now - c.to).abs() > GAIN_TOLERANCE {
+                self.settled.insert(c.key.clone(), (c.to, now));
+                quantized.push((c.clone(), now));
+            } else {
+                self.settled.remove(&c.key);
+            }
+        }
+        quantized
+    }
 }
 
 /// The most preferred device that is currently present.
@@ -108,6 +152,39 @@ mod tests {
         // Same id, other direction: not locked.
         let out = [dev("mic", Direction::Output, true, 0.2)];
         assert!(gain_corrections(&out, &s).is_empty());
+    }
+
+    #[test]
+    fn gain_locker_accepts_quantized_volume() {
+        let mut s = Settings::default();
+        s.set_gain_lock(pref("mic"), Direction::Input, Some(0.73));
+        let mut locker = GainLocker::default();
+
+        let before = [dev("mic", Direction::Input, true, 0.40)];
+        let c = locker.corrections(&before, &s);
+        assert_eq!(c.len(), 1);
+        // The device snaps to 0.75 instead of 0.73.
+        let after = [dev("mic", Direction::Input, true, 0.75)];
+        let q = locker.observe(&c, &after);
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0].1, 0.75);
+        // Next refresh: 0.75 counts as held, no endless corrections.
+        assert!(locker.corrections(&after, &s).is_empty());
+        // But a real change by another app is still corrected.
+        let lowered = [dev("mic", Direction::Input, true, 0.20)];
+        assert_eq!(locker.corrections(&lowered, &s).len(), 1);
+        // A new lock value resets the accepted value.
+        s.set_gain_lock(pref("mic"), Direction::Input, Some(0.5));
+        assert_eq!(locker.corrections(&after, &s).len(), 1);
+    }
+
+    #[test]
+    fn gain_locker_exact_devices_are_not_marked() {
+        let mut s = Settings::default();
+        s.set_gain_lock(pref("mic"), Direction::Input, Some(0.6));
+        let mut locker = GainLocker::default();
+        let c = locker.corrections(&[dev("mic", Direction::Input, true, 0.1)], &s);
+        assert!(locker.observe(&c, &[dev("mic", Direction::Input, true, 0.6)]).is_empty());
     }
 
     #[test]

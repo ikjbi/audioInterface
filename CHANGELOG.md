@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- Gain lock no longer loops forever on devices that only accept volume in steps. When the
+  device settles on a nearby value, that value is accepted and a warning is logged once.
+
 ### Added
 - Project scaffold: Cargo project, MIT license, build plan (`PLAN.md`).
 - Core types (`Device`, `Direction`, `Transport`, `DeviceRef`) and CLI-style device resolution.

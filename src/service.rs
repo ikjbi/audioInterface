@@ -12,7 +12,7 @@ use crate::backend::AudioBackend;
 use crate::levels::LevelCell;
 use crate::meter::MeterEngine;
 use crate::model::{Device, DeviceKey, Direction, Transport};
-use crate::rules::{AutoSwitcher, gain_corrections};
+use crate::rules::{AutoSwitcher, GainLocker};
 use crate::settings::Settings;
 use anyhow::Result;
 use std::collections::{BTreeSet, HashMap, VecDeque};
@@ -134,6 +134,7 @@ struct Worker {
     meters: MeterEngine,
     native_cells: HashMap<DeviceKey, Arc<LevelCell>>,
     switcher: AutoSwitcher,
+    locker: GainLocker,
     monitored: BTreeSet<DeviceKey>,
     devices: Vec<Device>,
     have_listed: bool,
@@ -153,6 +154,7 @@ impl Worker {
             meters,
             native_cells: HashMap::new(),
             switcher: AutoSwitcher::default(),
+            locker: GainLocker::default(),
             monitored: BTreeSet::new(),
             devices: Vec::new(),
             have_listed: false,
@@ -328,7 +330,8 @@ impl Worker {
         let mut changed = false;
         let mut msgs = Vec::new();
 
-        for c in gain_corrections(&devices, &self.settings) {
+        let mut applied = Vec::new();
+        for c in self.locker.corrections(&devices, &self.settings) {
             match backend.set_volume(&c.key.id, c.key.direction, c.to) {
                 Ok(()) => {
                     msgs.push((
@@ -336,6 +339,7 @@ impl Worker {
                         format!("Gain lock: restored {} from {:.0}% to {:.0}%", c.name, c.from * 100.0, c.to * 100.0),
                     ));
                     changed = true;
+                    applied.push(c);
                 }
                 Err(e) => msgs.push((EventKind::Error, format!("Gain lock on {} failed: {e:#}", c.name))),
             }
@@ -354,6 +358,17 @@ impl Worker {
 
         if changed && let Ok(d) = backend.devices() {
             devices = d;
+        }
+        for (c, actual) in self.locker.observe(&applied, &devices) {
+            msgs.push((
+                EventKind::Warning,
+                format!(
+                    "{} can't be set to exactly {:.0}% (it uses volume steps); holding it at {:.0}%",
+                    c.name,
+                    c.to * 100.0,
+                    actual * 100.0
+                ),
+            ));
         }
         for (kind, m) in msgs {
             self.log(kind, m);
