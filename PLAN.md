@@ -100,9 +100,9 @@ pavucontrol (Linux). Ordered by value. Platform limits are noted where an OS has
 - [ ] 11.8 Per-app volume and mute mixer (Windows sessions, PulseAudio streams; macOS has no public API, so it's shown read-only)
 
 **Diagnostics & testing**
-- [ ] 11.9 Mic test: record 5 s and play it back on the default output
-- [ ] 11.10 Speaker test: left/right test tones to identify channels
-- [ ] 11.11 Live mic monitoring ("hear yourself") with a volume control
+- [x] 11.9 Mic test: record 5 s and play it back on the default output
+- [x] 11.10 Speaker test: left/right test tones to identify channels
+- [x] 11.11 Live mic monitoring ("hear yourself") with a volume control
 - [ ] 11.12 Spectrum analyzer view for inputs
 - [ ] 11.13 Noise floor, SNR estimate, clip counter per metered input
 - [ ] 11.14 Device format info: sample rate, channels (and set the sample rate on macOS)

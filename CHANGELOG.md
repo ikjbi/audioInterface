@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Test tools** (right-click a device): speaker test tone (left/right/both), mic test (record 5 s and
+  play back), and live mic monitoring with a volume control. CLI: `test-tone`, `mic-test`.
 - **Global hotkeys** (configurable, Settings → Global hotkeys): Ctrl+Alt+M mutes/unmutes the mic,
   Ctrl+Alt+O / Ctrl+Alt+I switch to the next output/input (preferred order, hidden skipped), with
   a notification. Linux: X11 sessions.

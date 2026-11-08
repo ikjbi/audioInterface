@@ -113,6 +113,23 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Play a short test tone on an output (default: the default output).
+    TestTone {
+        device: Option<String>,
+        #[arg(long, value_enum, default_value_t = audio_interface::audio_tools::Channel::Both)]
+        channel: audio_interface::audio_tools::Channel,
+    },
+    /// Record a few seconds from a mic and play it back.
+    MicTest {
+        /// Input to test (default: the default input).
+        #[arg(long)]
+        input: Option<String>,
+        /// Output for playback (default: the default output).
+        #[arg(long)]
+        output: Option<String>,
+        #[arg(long, default_value_t = 5.0)]
+        seconds: f32,
+    },
     /// Manage profiles (saved setups of default devices, volumes, mutes, gain locks).
     Profile {
         #[command(subcommand)]
@@ -270,6 +287,40 @@ fn run(cli: Cli) -> Result<()> {
                 print!("{}", report.to_text(&format!("Audio session report: {name}")));
             }
             Ok(())
+        }
+        Cmd::TestTone { device, channel } => {
+            let devices = make_backend(mock)?.devices()?;
+            let d = pick(&devices, Direction::Output, device.as_deref())?;
+            println!("Playing a test tone on \"{}\" ({channel:?})", d.name);
+            audio_interface::audio_tools::wait(
+                &audio_interface::audio_tools::speaker_test(d.id.clone(), channel),
+                Duration::from_secs(10),
+            )
+        }
+        Cmd::MicTest { input, output, seconds } => {
+            let devices = make_backend(mock)?.devices()?;
+            let i = pick(&devices, Direction::Input, input.as_deref())?;
+            let o = pick(&devices, Direction::Output, output.as_deref())?;
+            println!("Recording {seconds} s from \"{}\"; speak now…", i.name);
+            let h = audio_interface::audio_tools::mic_test(i.id.clone(), o.id.clone(), seconds);
+            let mut announced = false;
+            let start = Instant::now();
+            loop {
+                match h.state() {
+                    audio_interface::audio_tools::ToolState::Playing { label } if !announced => {
+                        println!("Playing back on \"{}\": {label}", o.name);
+                        announced = true;
+                    }
+                    audio_interface::audio_tools::ToolState::Done => return Ok(()),
+                    audio_interface::audio_tools::ToolState::Failed(e) => anyhow::bail!("{e}"),
+                    _ => {}
+                }
+                if start.elapsed() > Duration::from_secs_f32(seconds * 2.0 + 15.0) {
+                    h.stop();
+                    anyhow::bail!("timed out (microphone permission?)");
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
         }
         Cmd::Profile { action } => {
             let path = settings_path.context("no settings location available")?;
@@ -468,6 +519,17 @@ fn run_record(
             }
             return Ok(());
         }
+    }
+}
+
+/// Resolve a device by query, or the default for the direction.
+fn pick<'a>(devices: &'a [Device], direction: Direction, query: Option<&str>) -> Result<&'a Device> {
+    match query {
+        Some(q) => resolve_device(devices, direction, q),
+        None => devices
+            .iter()
+            .find(|d| d.direction == direction && d.is_default)
+            .with_context(|| format!("no default {direction} device")),
     }
 }
 

@@ -139,6 +139,35 @@ $BIN analyze "$CSV" | tee report.txt
 grep -q "OS gain lowered from 100% to 50%" report.txt || fail "gain change not found in report"
 $BIN analyze "$CSV" --json | python3 -c 'import json,sys; r=json.load(sys.stdin); assert any(f["kind"]=="gain_change" for f in r["findings"])'
 
+step "speaker test tone (metered through the sink monitor)"
+( sleep 0.3; $BIN test-tone ci_headphones --channel left ) &
+out=$($BIN meter --direction output ci_headphones --seconds 2 | tr '\r' '\n' | grep '^summary:')
+wait
+echo "$out"
+python3 - "$out" <<'EOF3'
+import re, sys
+max_db = float(re.search(r"max_db=(-?[\d.]+)", sys.argv[1]).group(1))
+# 0.25 amplitude tone = -12 dBFS
+assert -15 < max_db < -9, max_db
+print("test tone OK")
+EOF3
+
+step "mic test (record the sine mic, play it back on ci_speakers)"
+$BIN set-default output ci_speakers
+( $BIN mic-test --input ci_sine_mic --output ci_speakers --seconds 2 ) &
+MT=$!
+sleep 2.4
+out=$($BIN meter --direction output ci_speakers --seconds 1.5 | tr '\r' '\n' | grep '^summary:')
+wait $MT
+echo "$out"
+python3 - "$out" <<'EOF4'
+import re, sys
+max_db = float(re.search(r"max_db=(-?[\d.]+)", sys.argv[1]).group(1))
+# The 0.5-amplitude sine played back: about -6 dBFS
+assert -10 < max_db < -3, max_db
+print("mic test playback OK")
+EOF4
+
 step "errors"
 if $BIN set-default output does-not-exist 2>err.txt; then fail "expected failure"; fi
 grep -q "no output device matches" err.txt || { cat err.txt; fail "bad error message"; }

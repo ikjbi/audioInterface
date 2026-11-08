@@ -98,6 +98,8 @@ struct App {
     hidden: bool,
     /// Quit was chosen (don't hide to tray on close).
     quitting: bool,
+    /// Running test tools (speaker test, mic test, monitor), per device.
+    tools: Vec<(DeviceKey, &'static str, crate::audio_tools::ToolHandle)>,
 }
 
 const GREEN: Color32 = Color32::from_rgb(0x3f, 0xb9, 0x50);
@@ -129,6 +131,7 @@ impl App {
             desktop: None,
             hidden: false,
             quitting: false,
+            tools: Vec::new(),
             recordings_panel: RecordingsPanel {
                 open: std::env::var("AUDIO_INTERFACE_OPEN").is_ok_and(|v| v == "recordings"),
                 ..RecordingsPanel::default()
@@ -407,6 +410,48 @@ impl App {
                                 self.service.send(Request::SetCommsDefault(key.clone()));
                                 ui.close();
                             }
+                            ui.separator();
+                            let default_out = self
+                                .view
+                                .devices
+                                .iter()
+                                .find(|o| o.direction == Direction::Output && o.is_default)
+                                .map(|o| o.id.clone());
+                            if d.direction == Direction::Output {
+                                ui.menu_button("🔊 Test tone", |ui| {
+                                    for (label, ch) in [
+                                        ("Left", crate::audio_tools::Channel::Left),
+                                        ("Right", crate::audio_tools::Channel::Right),
+                                        ("Both", crate::audio_tools::Channel::Both),
+                                    ] {
+                                        if ui.button(label).clicked() {
+                                            let h = crate::audio_tools::speaker_test(d.id.clone(), ch);
+                                            self.tools.push((key.clone(), "Speaker test", h));
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            } else if let Some(out) = default_out {
+                                if ui
+                                    .button("🎙 Mic test (record 5 s, play back)")
+                                    .on_hover_text("Plays back on the default output")
+                                    .clicked()
+                                {
+                                    let h = crate::audio_tools::mic_test(d.id.clone(), out.clone(), 5.0);
+                                    self.tools.push((key.clone(), "Mic test", h));
+                                    ui.close();
+                                }
+                                if ui
+                                    .button("🎧 Listen to this mic")
+                                    .on_hover_text("Hear yourself live on the default output. Use headphones: speakers will feed back.")
+                                    .clicked()
+                                {
+                                    let h = crate::audio_tools::monitor(d.id.clone(), out);
+                                    self.tools.push((key.clone(), "Monitor", h));
+                                    ui.close();
+                                }
+                            }
+                            ui.separator();
                             if ui.button("🙈 Hide this device").clicked() {
                                 self.settings.set_hidden(d, true);
                                 self.settings_changed();
@@ -509,6 +554,9 @@ impl App {
                 }
             });
 
+            // Running test tools.
+            self.tools_row(ui, &key);
+
             // Meter.
             self.meter_row(ui, d);
 
@@ -553,6 +601,40 @@ impl App {
                 }
             });
         });
+    }
+
+    fn tools_row(&mut self, ui: &mut egui::Ui, key: &DeviceKey) {
+        use crate::audio_tools::ToolState;
+        let mut remove = Vec::new();
+        for (i, (k, name, h)) in self.tools.iter().enumerate() {
+            if k != key {
+                continue;
+            }
+            ui.horizontal(|ui| {
+                let (text, color) = match h.state() {
+                    ToolState::Starting => (format!("{name}: starting…"), MUTED_TEXT),
+                    ToolState::Recording { seconds_left } => (format!("{name}: recording… {seconds_left:.0} s"), RED),
+                    ToolState::Playing { label } => (format!("{name}: {label}"), BLUE),
+                    ToolState::Done => (format!("{name}: done"), GREEN),
+                    ToolState::Failed(e) => (format!("{name} failed: {e}"), RED),
+                };
+                ui.label(RichText::new(text).small().color(color));
+                if *name == "Monitor" && !h.is_finished() {
+                    let mut v = h.volume() * 100.0;
+                    if ui.add(egui::Slider::new(&mut v, 0.0..=100.0).suffix("%").fixed_decimals(0)).changed() {
+                        h.set_volume(v / 100.0);
+                    }
+                }
+                let label = if h.is_finished() { "✕" } else { "■ Stop" };
+                if ui.small_button(label).clicked() {
+                    h.stop();
+                    remove.push(i);
+                }
+            });
+        }
+        for i in remove.into_iter().rev() {
+            self.tools.remove(i);
+        }
     }
 
     fn meter_row(&mut self, ui: &mut egui::Ui, d: &Device) {

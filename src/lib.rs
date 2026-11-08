@@ -8,6 +8,7 @@
 //! * [`gui`]: the egui desktop interface
 
 pub mod analysis;
+pub mod audio_tools;
 pub mod autostart;
 pub mod backend;
 pub mod bluetooth;
