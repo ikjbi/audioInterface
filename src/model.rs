@@ -99,6 +99,28 @@ pub struct Device {
     /// Teams, Zoom, …), which can differ from the normal default.
     #[serde(default)]
     pub is_comms_default: bool,
+    /// Current sample rate in Hz, if known.
+    #[serde(default)]
+    pub sample_rate: Option<u32>,
+    /// Channel count, if known.
+    #[serde(default)]
+    pub channels: Option<u16>,
+}
+
+impl Device {
+    /// e.g. "48 kHz · 2 ch".
+    pub fn format_label(&self) -> Option<String> {
+        let rate = self
+            .sample_rate
+            .map(|r| if r % 1000 == 0 { format!("{} kHz", r / 1000) } else { format!("{:.1} kHz", r as f32 / 1000.0) });
+        let ch = self.channels.map(|c| format!("{c} ch"));
+        match (rate, ch) {
+            (Some(r), Some(c)) => Some(format!("{r} · {c}")),
+            (Some(r), None) => Some(r),
+            (None, Some(c)) => Some(c),
+            (None, None) => None,
+        }
+    }
 }
 
 impl Device {
@@ -221,6 +243,8 @@ pub(crate) fn test_device(id: &str, name: &str, direction: Direction) -> Device 
         hands_free: false,
         in_use_by: Vec::new(),
         is_comms_default: false,
+        sample_rate: None,
+        channels: None,
     }
 }
 
@@ -252,6 +276,18 @@ mod tests {
         let err = resolve_device(&d, Direction::Input, "micro").unwrap_err().to_string();
         assert!(err.contains("several"), "{err}");
         assert!(resolve_device(&d, Direction::Output, "usb").is_err());
+    }
+
+    #[test]
+    fn format_labels() {
+        let mut d = test_device("x", "X", Direction::Input);
+        assert_eq!(d.format_label(), None);
+        d.sample_rate = Some(48_000);
+        d.channels = Some(2);
+        assert_eq!(d.format_label().unwrap(), "48 kHz · 2 ch");
+        d.sample_rate = Some(44_100);
+        d.channels = None;
+        assert_eq!(d.format_label().unwrap(), "44.1 kHz");
     }
 
     #[test]

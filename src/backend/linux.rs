@@ -230,6 +230,8 @@ impl AudioBackend for PulseBackend {
                 hands_free,
                 in_use_by: Vec::new(),
                 is_comms_default: false,
+                sample_rate: None,
+                channels: None,
             });
         };
 
@@ -253,6 +255,8 @@ impl AudioBackend for PulseBackend {
             );
             if let Some(last) = out.last_mut() {
                 last.in_use_by = sink_users.remove(&s.index).unwrap_or_default();
+                last.sample_rate = Some(s.sample_spec.sample_rate);
+                last.channels = Some(s.sample_spec.channels as u16);
             }
         }
         for s in &sources {
@@ -276,6 +280,8 @@ impl AudioBackend for PulseBackend {
             );
             if let Some(last) = out.last_mut() {
                 last.in_use_by = source_users.remove(&s.index).unwrap_or_default();
+                last.sample_rate = Some(s.sample_spec.sample_rate);
+                last.channels = Some(s.sample_spec.channels as u16);
             }
         }
         Ok(out)

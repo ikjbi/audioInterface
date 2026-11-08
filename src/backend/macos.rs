@@ -102,6 +102,35 @@ const DEV_STEREO_CHANNELS: u32 = fourcc(b"dch2");
 const DEV_NOMINAL_RATE: u32 = fourcc(b"nsrt");
 const DEV_CAN_BE_DEFAULT: u32 = fourcc(b"dflt");
 const DEV_CAN_BE_SYSTEM_DEFAULT: u32 = fourcc(b"sflt");
+const DEV_AVAILABLE_RATES: u32 = fourcc(b"nsr#");
+const STREAM_VIRTUAL_FORMAT: u32 = fourcc(b"sfmt");
+
+/// `AudioStreamBasicDescription`.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct Asbd {
+    sample_rate: f64,
+    format_id: u32,
+    format_flags: u32,
+    bytes_per_packet: u32,
+    frames_per_packet: u32,
+    bytes_per_frame: u32,
+    channels_per_frame: u32,
+    bits_per_channel: u32,
+    reserved: u32,
+}
+
+/// `AudioValueRange`.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct ValueRange {
+    min: f64,
+    max: f64,
+}
+
+/// Common rates offered when a device reports a continuous range.
+const COMMON_RATES: [u32; 8] = [8_000, 16_000, 22_050, 32_000, 44_100, 48_000, 88_200, 96_000];
+
 // Process objects (macOS 14+): which apps are doing audio I/O on which device.
 const HW_PROCESS_LIST: u32 = fourcc(b"prs#");
 const PROC_PID: u32 = fourcc(b"ppid");
@@ -335,7 +364,23 @@ impl CoreAudioBackend {
                 .unwrap_or_else(|_| {
                     bluetooth::is_hands_free(transport, &bluetooth::Hints { name: &name, ..Default::default() })
                 });
+        let sample_rate = get::<f64>(id, &addr(DEV_NOMINAL_RATE, SCOPE_GLOBAL, ELEMENT_MAIN))
+            .ok()
+            .filter(|r| *r > 0.0)
+            .map(|r| r.round() as u32);
+        let channels = get_array::<AudioObjectID>(id, &addr(DEV_STREAMS, scope_of(direction), ELEMENT_MAIN))
+            .ok()
+            .map(|streams| {
+                streams
+                    .iter()
+                    .filter_map(|&st| get::<Asbd>(st, &addr(STREAM_VIRTUAL_FORMAT, SCOPE_GLOBAL, ELEMENT_MAIN)).ok())
+                    .map(|f| f.channels_per_frame as u16)
+                    .sum::<u16>()
+            })
+            .filter(|&c| c > 0);
         Some(Device {
+            sample_rate,
+            channels,
             id: uid,
             name,
             direction,
@@ -416,6 +461,32 @@ impl AudioBackend for CoreAudioBackend {
             set(id, &addr(DEV_VOLUME_SCALAR, scope, e), v)?;
         }
         Ok(())
+    }
+
+    fn sample_rates(&mut self, uid: &str, _direction: Direction) -> Vec<u32> {
+        let Ok(id) = self.object_for_uid(uid) else { return Vec::new() };
+        let a = addr(DEV_NOMINAL_RATE, SCOPE_GLOBAL, ELEMENT_MAIN);
+        if !settable(id, &a) {
+            return Vec::new();
+        }
+        let ranges =
+            get_array::<ValueRange>(id, &addr(DEV_AVAILABLE_RATES, SCOPE_GLOBAL, ELEMENT_MAIN)).unwrap_or_default();
+        let mut rates: Vec<u32> = Vec::new();
+        for r in ranges {
+            if (r.max - r.min).abs() < 0.5 {
+                rates.push(r.min.round() as u32);
+            } else {
+                rates.extend(COMMON_RATES.iter().copied().filter(|&c| c as f64 >= r.min && c as f64 <= r.max));
+            }
+        }
+        rates.sort_unstable();
+        rates.dedup();
+        rates
+    }
+
+    fn set_sample_rate(&mut self, uid: &str, _direction: Direction, rate: u32) -> Result<()> {
+        let id = self.object_for_uid(uid)?;
+        set(id, &addr(DEV_NOMINAL_RATE, SCOPE_GLOBAL, ELEMENT_MAIN), rate as f64)
     }
 
     fn set_mute(&mut self, uid: &str, direction: Direction, muted: bool) -> Result<()> {

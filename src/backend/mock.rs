@@ -32,6 +32,8 @@ impl MockBackend {
             hands_free,
             in_use_by: Vec::new(),
             is_comms_default: false,
+            sample_rate: None,
+            channels: None,
         };
         MockBackend::new(vec![
             dev("builtin-mic", "Built-in Microphone", Direction::Input, Transport::BuiltIn, true, false),

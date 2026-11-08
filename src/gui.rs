@@ -68,6 +68,7 @@ struct View {
     monitored: BTreeSet<DeviceKey>,
     native_metered: BTreeSet<DeviceKey>,
     windows: HashMap<DeviceKey, Arc<crate::levels::SampleWindow>>,
+    sample_rates: HashMap<DeviceKey, Vec<u32>>,
     recordings: Vec<ActiveRecording>,
     finished: Vec<FinishedRecording>,
 }
@@ -199,6 +200,7 @@ impl App {
             monitored: snap.monitored.clone(),
             native_metered: snap.native_metered.clone(),
             windows: snap.windows.clone(),
+            sample_rates: snap.sample_rates.clone(),
             recordings: snap.recordings.clone(),
             finished: snap.finished.iter().cloned().collect(),
         };
@@ -458,6 +460,17 @@ impl App {
                                     ui.close();
                                 }
                             }
+                            if let Some(rates) = self.view.sample_rates.get(&key).filter(|r| r.len() > 1) {
+                                ui.menu_button("⏱ Sample rate", |ui| {
+                                    for r in rates {
+                                        let label = format!("{:.1} kHz", *r as f32 / 1000.0);
+                                        if ui.selectable_label(d.sample_rate == Some(*r), label).clicked() {
+                                            self.service.send(Request::SetSampleRate(key.clone(), *r));
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            }
                             ui.separator();
                             if ui.button("🙈 Hide this device").clicked() {
                                 self.settings.set_hidden(d, true);
@@ -492,6 +505,9 @@ impl App {
                         self.service.send(Request::SetDefault(key.clone()));
                     }
                     ui.label(RichText::new(transport_icon(d.transport)).small().color(MUTED_TEXT));
+                    if let Some(f) = d.format_label() {
+                        ui.label(RichText::new(f).small().color(MUTED_TEXT));
+                    }
                 });
             });
 

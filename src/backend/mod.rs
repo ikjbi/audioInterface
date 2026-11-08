@@ -38,6 +38,16 @@ pub trait AudioBackend {
         anyhow::bail!("this OS has no separate communications device")
     }
 
+    /// Sample rates the device supports switching to (empty = can't be changed here).
+    fn sample_rates(&mut self, _id: &str, _direction: Direction) -> Vec<u32> {
+        Vec::new()
+    }
+
+    /// Change the device sample rate (macOS).
+    fn set_sample_rate(&mut self, _id: &str, _direction: Direction, _rate: u32) -> Result<()> {
+        anyhow::bail!("changing the sample rate is not supported on this OS")
+    }
+
     /// Set volume/gain as a scalar in `0.0..=1.0`.
     fn set_volume(&mut self, id: &str, direction: Direction, volume: f32) -> Result<()>;
 

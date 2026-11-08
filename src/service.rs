@@ -33,6 +33,8 @@ pub enum Request {
     SetDefault(DeviceKey),
     /// Windows: make this the default communications device only.
     SetCommsDefault(DeviceKey),
+    /// Change a device's sample rate (macOS).
+    SetSampleRate(DeviceKey, u32),
     /// Toggle mute on the default device of a direction (hotkey / tray).
     ToggleDefaultMute(Direction),
     /// Switch the default to the next device (hotkey / tray).
@@ -81,6 +83,8 @@ pub struct Snapshot {
     pub events: VecDeque<Event>,
     /// Level cells for every metered device.
     pub levels: HashMap<DeviceKey, Arc<LevelCell>>,
+    /// Sample rates each device can be switched to (macOS; empty elsewhere).
+    pub sample_rates: HashMap<DeviceKey, Vec<u32>>,
     /// Recent raw samples of capture-metered devices (spectrum view).
     pub windows: HashMap<DeviceKey, Arc<crate::levels::SampleWindow>>,
     /// Why metering failed for a device.
@@ -187,6 +191,7 @@ struct Worker {
     /// Auto-started recordings, and since when their device has been idle.
     auto_recording: HashMap<DeviceKey, Option<Instant>>,
     events_forwarded: u64,
+    rates_checked: Option<Instant>,
     /// When we (user request, gain lock, profile) last changed a volume, so
     /// changes made by other apps can be told apart.
     our_volume_change: HashMap<DeviceKey, Instant>,
@@ -216,6 +221,7 @@ impl Worker {
             want_audio: BTreeSet::new(),
             auto_recording: HashMap::new(),
             events_forwarded: 0,
+            rates_checked: None,
             our_volume_change: HashMap::new(),
             notified: Mutex::new(HashMap::new()),
             shared,
@@ -377,6 +383,7 @@ impl Worker {
         }
         let name = match &req {
             Request::SetDefault(k)
+            | Request::SetSampleRate(k, _)
             | Request::SetCommsDefault(k)
             | Request::SetVolume(k, _)
             | Request::SetMute(k, _) => self.name_of(k),
@@ -387,6 +394,9 @@ impl Worker {
             Request::SetDefault(k) => {
                 backend.set_default(&k.id, k.direction).map(|_| format!("Default {} set to {name}", k.direction))
             }
+            Request::SetSampleRate(k, rate) => backend
+                .set_sample_rate(&k.id, k.direction, *rate)
+                .map(|_| format!("{name} sample rate set to {rate} Hz")),
             Request::SetCommsDefault(k) => backend
                 .set_comms_default(&k.id, k.direction)
                 .map(|_| format!("Default communications {} set to {name}", k.direction)),
@@ -441,6 +451,20 @@ impl Worker {
             .collect();
         let meter_errors =
             self.devices.iter().filter_map(|d| self.meters.error(&d.key()).map(|e| (d.key(), e))).collect();
+        // Supported sample rates change rarely; re-query every 10 s.
+        let rates = if self.rates_checked.is_none_or(|t| t.elapsed() > Duration::from_secs(10)) {
+            self.rates_checked = Some(Instant::now());
+            let backend = self.backend.as_mut().unwrap();
+            Some(
+                self.devices
+                    .iter()
+                    .map(|d| (d.key(), backend.sample_rates(&d.id, d.direction)))
+                    .filter(|(_, r)| !r.is_empty())
+                    .collect::<HashMap<_, _>>(),
+            )
+        } else {
+            None
+        };
         let windows: HashMap<DeviceKey, Arc<crate::levels::SampleWindow>> =
             self.devices.iter().filter_map(|d| self.meters.window(&d.key()).map(|w| (d.key(), w))).collect();
         let native: BTreeSet<DeviceKey> = self.native_cells.keys().cloned().collect();
@@ -461,6 +485,9 @@ impl Worker {
         s.devices = devices;
         s.levels = levels;
         s.windows = windows;
+        if let Some(r) = rates {
+            s.sample_rates = r;
+        }
         s.meter_errors = meter_errors;
         s.monitored = monitored;
         s.native_metered = native;

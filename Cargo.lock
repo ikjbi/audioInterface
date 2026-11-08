@@ -532,6 +532,7 @@ dependencies = [
  "global-hotkey",
  "hound",
  "jiff",
+ "libc",
  "log",
  "notify-rust",
  "png",

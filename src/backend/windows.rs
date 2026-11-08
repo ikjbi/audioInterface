@@ -18,9 +18,9 @@ use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Foundation::S_OK;
 use windows::Win32::Media::Audio::Endpoints::{IAudioEndpointVolume, IAudioMeterInformation};
 use windows::Win32::Media::Audio::{
-    AudioSessionStateActive, DEVICE_STATE_ACTIVE, EDataFlow, ERole, IAudioSessionControl2, IAudioSessionManager2,
-    IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, PKEY_AudioEndpoint_FormFactor, eCapture, eCommunications,
-    eConsole, eMultimedia, eRender,
+    AudioSessionStateActive, DEVICE_STATE_ACTIVE, EDataFlow, ERole, IAudioClient, IAudioSessionControl2,
+    IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, PKEY_AudioEndpoint_FormFactor, eCapture,
+    eCommunications, eConsole, eMultimedia, eRender,
 };
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, STGM_READ,
@@ -75,6 +75,23 @@ fn flow(direction: Direction) -> EDataFlow {
 pub struct WasapiBackend {
     enumerator: IMMDeviceEnumerator,
     meters: HashMap<(String, Direction), IAudioMeterInformation>,
+    /// Shared-mode mix format per endpoint (rate, channels), refreshed every 10 s.
+    formats: HashMap<String, (std::time::Instant, Option<(u32, u16)>)>,
+}
+
+/// The endpoint's shared-mode mix format: (sample rate, channels).
+fn mix_format(dev: &IMMDevice) -> Option<(u32, u16)> {
+    unsafe {
+        let client: IAudioClient = dev.Activate(CLSCTX_ALL, None).ok()?;
+        let p = client.GetMixFormat().ok()?;
+        if p.is_null() {
+            return None;
+        }
+        let f = std::ptr::read_unaligned(p);
+        CoTaskMemFree(Some(p as *const c_void));
+        let (rate, ch) = (f.nSamplesPerSec, f.nChannels);
+        Some((rate, ch))
+    }
 }
 
 impl WasapiBackend {
@@ -85,7 +102,7 @@ impl WasapiBackend {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             let enumerator: IMMDeviceEnumerator =
                 CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).context("create MMDeviceEnumerator")?;
-            Ok(WasapiBackend { enumerator, meters: HashMap::new() })
+            Ok(WasapiBackend { enumerator, meters: HashMap::new(), formats: HashMap::new() })
         }
     }
 
@@ -226,6 +243,14 @@ impl AudioBackend for WasapiBackend {
                 let muted = ev.as_ref().and_then(|e| unsafe { e.GetMute() }.ok()).map(|b| b.as_bool());
 
                 let is_comms_default = comms_default.as_deref() == Some(id.as_str());
+                let fmt = match self.formats.get(&id) {
+                    Some((at, f)) if at.elapsed() < std::time::Duration::from_secs(10) => *f,
+                    _ => {
+                        let f = mix_format(&dev);
+                        self.formats.insert(id.clone(), (std::time::Instant::now(), f));
+                        f
+                    }
+                };
                 out.push(Device {
                     is_default: default.as_deref() == Some(id.as_str()),
                     id,
@@ -237,6 +262,8 @@ impl AudioBackend for WasapiBackend {
                     hands_free,
                     in_use_by: session_users(&dev),
                     is_comms_default,
+                    sample_rate: fmt.map(|f| f.0),
+                    channels: fmt.map(|f| f.1),
                 });
             }
         }

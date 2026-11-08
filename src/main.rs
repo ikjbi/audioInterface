@@ -113,6 +113,14 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Show a device's sample rate and the rates it supports, or set it (macOS).
+    SampleRate {
+        #[arg(value_enum)]
+        direction: Direction,
+        device: String,
+        /// New rate in Hz, e.g. 48000.
+        rate: Option<u32>,
+    },
     /// Play a short test tone on an output (default: the default output).
     TestTone {
         device: Option<String>,
@@ -167,6 +175,12 @@ fn main() {
     #[cfg(all(windows, not(debug_assertions)))]
     attach_parent_console();
 
+    // Exit quietly when piped into e.g. `head`, like other Unix tools,
+    // instead of panicking on a broken pipe.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let cli = Cli::parse();
     if let Err(e) = run(cli) {
@@ -285,6 +299,25 @@ fn run(cli: Cli) -> Result<()> {
             } else {
                 let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 print!("{}", report.to_text(&format!("Audio session report: {name}")));
+            }
+            Ok(())
+        }
+        Cmd::SampleRate { direction, device, rate } => {
+            let mut b = make_backend(mock)?;
+            let devices = b.devices()?;
+            let d = resolve_device(&devices, direction, &device)?.clone();
+            if let Some(r) = rate {
+                b.set_sample_rate(&d.id, direction, r)?;
+                let now = b.devices()?.into_iter().find(|x| x.key() == d.key()).and_then(|x| x.sample_rate);
+                println!("{}: {} Hz", d.name, now.map(|n| n.to_string()).unwrap_or_else(|| "?".into()));
+            } else {
+                println!("{}: {}", d.name, d.format_label().unwrap_or_else(|| "format unknown".into()));
+                let rates = b.sample_rates(&d.id, direction);
+                if rates.is_empty() {
+                    println!("(the sample rate can't be changed from here on this OS/device)");
+                } else {
+                    println!("available: {}", rates.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(", "));
+                }
             }
             Ok(())
         }
@@ -554,11 +587,12 @@ fn print_table(api: &str, devices: &[Device]) {
                 flags.push("calls default");
             }
             println!(
-                "  {} {:<40} {:>5}  {:<11} {}",
+                "  {} {:<40} {:>5}  {:<11} {:<15} {}",
                 if d.is_default { "*" } else { " " },
                 truncate(&d.name, 40),
                 fmt_volume(d.volume),
                 d.transport.label(),
+                d.format_label().unwrap_or_default(),
                 flags.join(", ")
             );
             println!("      id: {}", d.id);
