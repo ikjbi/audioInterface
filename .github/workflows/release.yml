@@ -55,16 +55,22 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           cargo build --release --locked
-          mkdir -p dist
-          tar -C target/release -czf dist/audio-interface-${{ matrix.name }}.tar.gz audio-interface
+          PKG=audio-interface-${{ matrix.name }}
+          mkdir -p dist/$PKG
+          cp target/release/audio-interface assets/icon.png packaging/linux/install-user.sh packaging/linux/audio-interface.desktop dist/$PKG/
+          cp docs/INSTALL.md README.md LICENSE dist/$PKG/
+          tar -C dist -czf dist/$PKG.tar.gz $PKG
+          rm -rf dist/$PKG
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
           cargo build --release --locked
-          mkdir -p dist
-          7z a dist/audio-interface-${{ matrix.name }}.zip ./target/release/audio-interface.exe
+          mkdir -p dist/pkg
+          cp target/release/audio-interface.exe "packaging/windows/Install shortcuts.cmd" packaging/windows/README.txt LICENSE dist/pkg/
+          (cd dist/pkg && 7z a ../audio-interface-${{ matrix.name }}.zip .)
+          rm -rf dist/pkg
 
       - name: Build (macOS universal .app)
         if: runner.os == 'macOS'

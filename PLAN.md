@@ -65,23 +65,25 @@ Status key: `[x]` done · `[~]` partially done / see notes · `[ ]` not started
 ## Phase 8: Polish (stretch)
 - [x] 30 s level history graph + typical-level readout (gain drift at a glance)
 - [ ] System tray / menu bar icon
-- [~] App icon and bundling (`.app`, `.msi`/`.exe`, AppImage/deb) (icon on all OSes + macOS `.app` done; Windows/Linux ship as plain binaries)
+- [x] App icon and bundling (new icon embedded in the Windows .exe; macOS .app; portable Windows zip and Linux tar.gz with user-level install scripts)
+- [x] Animated splash screen
+- [x] No-admin install guide (docs/INSTALL.md), with both sudo-free build paths tested in CI
 - [ ] Event-driven device notifications instead of polling
 
 ## Phase 9: Session recording and drop analysis
 Goal: find out if levels or gain drop halfway through a Teams call, and why.
-- [ ] Multi-consumer level cells (UI and recorder each see every peak)
-- [ ] Session recorder: CSV, one row per second (peak, RMS, OS gain, mute, signal status, hands-free, in-use apps, events)
-- [ ] Optional audio recording (WAV, 16 kHz mono) to listen back to the moment it dropped
-- [ ] Drop analysis: baseline speaking level, sliding-window drops, OS gain changes (e.g. Teams auto-adjust), signal loss and silence, with timestamps
-- [ ] CLI: `record` and `analyze`
-- [ ] GUI: record button, live recording indicator, recordings browser, report view with full-session chart
+- [x] Multi-consumer level cells (UI and recorder each see every peak)
+- [x] Session recorder: CSV, one row per second (peak, RMS, OS gain, mute, signal status, hands-free, in-use apps, events)
+- [x] Optional audio recording (WAV, 16 kHz mono) to listen back to the moment it dropped
+- [x] Drop analysis: baseline speaking level, sliding-window drops, OS gain changes (e.g. Teams auto-adjust), signal loss and silence, with timestamps
+- [x] CLI: `record` and `analyze`
+- [x] GUI: record button, live recording indicator, recordings browser, report view with full-session chart
 
 ## Phase 10: Which app is using the mic + auto-record calls
-- [ ] Detect which other apps are using each device (macOS process objects, Windows audio sessions, PulseAudio source outputs)
-- [ ] Show "in use by Teams" in the GUI and CLI
-- [ ] Auto-record: start recording when another app starts using a chosen device (a call starts), stop when the call ends
-- [ ] CI: Linux test records a test tone, analyzes it, and detects a `parecord` client as "in use"
+- [x] Detect which other apps are using each device (macOS process objects, Windows audio sessions, PulseAudio source outputs)
+- [x] Show "in use by Teams" in the GUI and CLI
+- [x] Auto-record: start recording when another app starts using a chosen device (a call starts), stop when the call ends
+- [~] CI: Linux test records a test tone, analyzes it, and detects a `parecord` client as "in use" (in-use + auto-record passed; level assertion re-running after the RMS fix)
 
 ---
 
@@ -114,3 +116,12 @@ Goal: find out if levels or gain drop halfway through a Teams call, and why.
 - **00:15** All six CI jobs are green. Windows WASAPI capture works once mic consent is granted
   (303 blocks, digital silence correctly detected), and the native output meter works. macOS runner
   capture works (286 blocks). Every backend and capture path is verified on all three OSes.
+
+### 2026-11-09
+- **00:05** Added "which app is using the device" detection on all three OSes. On macOS,
+  `afplay` was detected playing to the speakers (the output was muted during the test).
+- **00:10** Session recorder, WAV tap and drop analysis, with unit tests. CLI `record`,
+  `record --auto` and `analyze`. Recordings window with the session chart.
+- **00:15** Linux CI found that recorded RMS was diluted by service ticks with no new audio
+  block. Fixed with exact per-sample energy accumulation. New icon, Windows exe icon, splash
+  screen, and the no-admin install guide with CI jobs that prove the sudo-free build paths.

@@ -150,3 +150,67 @@ jobs:
             # Native output peak meter (IAudioMeterInformation)
             $BIN meter --direction output --seconds 2 | tr '\r' '\n' | grep summary
           fi
+
+  # The install guide promises builds without admin rights. Prove both paths.
+  windows-gnu:
+    name: Windows build with GNU toolchain (no admin)
+    runs-on: windows-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the GNU toolchain (per-user, no Visual Studio)
+        shell: bash
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
+          rustup default stable-x86_64-pc-windows-gnu
+          rustc -vV
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: gnu
+      - run: cargo build --release --locked
+      - name: Smoke test
+        shell: bash
+        run: |
+          target/release/audio-interface.exe --version
+          target/release/audio-interface.exe --mock list
+
+  linux-no-sudo:
+    name: Linux build without sudo (as documented)
+    runs-on: ubuntu-latest
+    needs: build
+    container: ubuntu:24.04
+    steps:
+      - name: Base system (what a typical desktop already has)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git gcc libc6-dev pkg-config libasound2t64 sudo
+          useradd -m builder
+      - uses: actions/checkout@v4
+        with:
+          path: src
+      - name: Build as an unprivileged user, following docs/INSTALL.md
+        run: |
+          chown -R builder "$GITHUB_WORKSPACE/src"
+          su builder -c 'set -eux
+            cd ~
+            ! sudo -n true 2>/dev/null   # really no sudo
+            curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            . "$HOME/.cargo/env"
+            mkdir -p ~/.local/alsa && cd ~/.local/alsa
+            apt-get download libasound2-dev
+            dpkg -x libasound2-dev_*.deb root
+            cd -
+            export PKG_CONFIG_PATH="$HOME/.local/alsa/root/usr/lib/x86_64-linux-gnu/pkgconfig"
+            export PKG_CONFIG_SYSROOT_DIR=/
+            mkdir -p ~/.local/alsa/lib && ln -sf /usr/lib/x86_64-linux-gnu/libasound.so.2 ~/.local/alsa/lib/libasound.so
+            export RUSTFLAGS="-L $HOME/.local/alsa/lib"
+            cd '"$GITHUB_WORKSPACE"'/src
+            cargo build --release --locked
+            ./target/release/audio-interface --mock list
+            mkdir -p /tmp/pkg && cp target/release/audio-interface assets/icon.png packaging/linux/* /tmp/pkg/
+            sh /tmp/pkg/install-user.sh
+            test -x ~/.local/bin/audio-interface
+            test -f ~/.local/share/applications/com.ikjbi.AudioInterface.desktop
+            ~/.local/bin/audio-interface --version
+            sh /tmp/pkg/install-user.sh --uninstall
+            test ! -e ~/.local/bin/audio-interface'

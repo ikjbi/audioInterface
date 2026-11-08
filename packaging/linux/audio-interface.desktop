@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Audio Interface
+GenericName=Audio Device Manager
+Comment=Choose default inputs and outputs, watch levels, lock mic gain, record call levels
+Exec=audio-interface
+Icon=audio-interface
+Terminal=false
+Categories=AudioVideo;Audio;Settings;HardwareSettings;
+Keywords=audio;microphone;mic;speaker;bluetooth;headset;volume;meter;gain;teams;
+StartupWMClass=audio-interface

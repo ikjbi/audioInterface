@@ -5,6 +5,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **Session recording**: ⏺ Record on any device logs level (peak and exact RMS), OS gain, mute,
+  signal status, Bluetooth hands-free mode, apps using the device, and events once per second to
+  CSV, with optional 16 kHz mono WAV audio. Files go to `Documents/Audio Interface Recordings`.
+- **Drop analysis** (`src/analysis.rs`): baseline speaking level, 60 s sliding-window drop
+  detection, OS gain changes (ramps merged), and attribution of each drop to a lowered OS gain
+  (app auto-adjust) or to an acoustic/hardware cause. Also reports signal-lost, digital-silence
+  and muted periods and hands-free switches. Writes `.report.txt` and `.report.json`.
+- **Which app is using a device** (macOS process objects, Windows audio sessions, PulseAudio
+  streams) shown on each device card and in `list --json` (`in_use_by`).
+- **Auto-record calls**: record any input another app starts using (optionally only some apps,
+  e.g. "teams"), and stop 10 s after the call ends.
+- Recordings window: live recording charts, auto-record settings, past sessions with verdict,
+  findings and a full-session chart (level, speaking-level trend, OS gain, drops, signal loss).
+- CLI: `record [--audio] [--seconds] [--out]`, `record --auto [--app NAME]`, `analyze <csv> [--json]`.
+- New app icon (meter bars with a level gradient), embedded in the Windows `.exe`; `assets/icon.png`
+  and `assets/icon.ico`.
+- Animated splash screen (LED meters with peak hold, live start-up status).
+- `docs/INSTALL.md`: no-admin installs for Windows (portable zip, GNU toolchain builds) and Linux
+  (portable tar.gz with `install-user.sh`, sudo-free builds), plus why WSL is not an option. Both
+  sudo-free build paths are tested in CI.
+
 ### Fixed
 - A meter blocked by OS microphone privacy (`Access is denied` on Windows) now explains why,
   and the GUI offers an "Open privacy settings" button (macOS and Windows).

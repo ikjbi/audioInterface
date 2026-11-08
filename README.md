@@ -7,6 +7,12 @@ and the OS sound settings. It runs on **Windows, macOS and Linux**.
 
 ![Audio Interface main window](docs/screenshot.png)
 
+<details><summary>Recording report and splash screen</summary>
+
+![Recordings window with drop analysis](docs/recordings.png)
+![Splash screen](docs/splash.png)
+</details>
+
 ## What it does
 
 - **See every device:** all inputs and outputs, which one is the system default, and how
@@ -24,10 +30,20 @@ and the OS sound settings. It runs on **Windows, macOS and Linux**.
 - **Bluetooth hands-free warnings:** using a Bluetooth headset's mic switches the headset to the
   call-quality "hands-free" profile (HFP), which makes music sound terrible. The app tells you
   when this is happening and never opens a Bluetooth mic for metering unless you ask.
+- **Session recording & drop analysis (⏺ Record):** logs a device once a second (level, OS gain,
+  mute, signal health, Bluetooth mode, which apps use it, events) to CSV, optionally with the
+  audio as a WAV. When you stop, a report tells you **whether your level dropped during the
+  call, when, by how much, and why**: was the OS gain lowered (e.g. Teams' "automatically adjust
+  mic"), or did the gain stay the same while the level fell (mic position, headset, Bluetooth)?
+- **"In use by" + auto-record calls:** shows which app is using each device (Teams, Zoom, …), and
+  can start recording automatically when a call starts and stop when it ends.
 - **Event log:** connects, disconnects, default changes, gain restores and errors.
 - **Scriptable CLI:** everything above is also available from the terminal.
 
 ## Install / build
+
+**No admin rights needed.** See **[docs/INSTALL.md](docs/INSTALL.md)** for portable Windows/Linux
+installs, building without admin/sudo, and why WSL doesn't work for this.
 
 You need a [Rust toolchain](https://rustup.rs) (stable, 1.88 or newer).
 
@@ -66,6 +82,10 @@ audio-interface volume input "USB Mic" 80       # set it to 80%
 audio-interface mute output "Speakers" toggle   # on | off | toggle
 audio-interface meter                    # live meter of the default input
 audio-interface meter "USB Mic" --seconds 10
+audio-interface record                   # log the default input until Ctrl+C, then report
+audio-interface record "Headset" --audio --seconds 3600
+audio-interface record --auto --app teams   # headless: record every Teams call
+audio-interface analyze "Documents/Audio Interface Recordings/<file>.csv"
 ```
 
 Devices can be given by ID, exact name, or any unique part of the name (case-insensitive).
