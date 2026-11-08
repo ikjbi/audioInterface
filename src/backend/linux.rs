@@ -6,7 +6,7 @@
 
 use super::{AudioBackend, clamp_volume};
 use crate::bluetooth::{self, Hints};
-use crate::model::{Device, DeviceProfile, Direction};
+use crate::model::{AppStream, Device, DeviceProfile, Direction};
 use anyhow::{Context, Result, anyhow, bail};
 use pulseaudio::protocol::{self, Command, CommandReply, Prop};
 use std::collections::HashMap;
@@ -366,6 +366,79 @@ impl AudioBackend for PulseBackend {
         })
     }
 
+    fn app_streams(&mut self) -> Vec<AppStream> {
+        let Ok((sinks, sources, inputs, outputs)) = self.with_conn(|c| {
+            let sinks: protocol::SinkInfoList = c.request(Command::GetSinkInfoList)?;
+            let sources: protocol::SourceInfoList = c.request(Command::GetSourceInfoList)?;
+            let inputs: protocol::SinkInputInfoList = c.request(Command::GetSinkInputInfoList)?;
+            let outputs: protocol::SourceOutputInfoList = c.request(Command::GetSourceOutputInfoList)?;
+            Ok((sinks, sources, inputs, outputs))
+        }) else {
+            return Vec::new();
+        };
+        let own_pid = std::process::id().to_string();
+        let app = |props: &protocol::Props| -> Option<String> {
+            if prop(props, c"application.process.id") == Some(own_pid.as_str()) {
+                return None;
+            }
+            let raw = prop(props, c"application.name").or_else(|| prop(props, c"application.process.binary"))?;
+            Some(crate::model::friendly_app_name(raw))
+        };
+        let max = |cv: &protocol::ChannelVolume| channel_scalars(cv).into_iter().fold(0.0f32, f32::max);
+        let mut out = Vec::new();
+        for i in &inputs {
+            let (Some(name), Some(sink)) = (app(&i.props), sinks.iter().find(|s| s.index == i.sink_index)) else {
+                continue;
+            };
+            if !i.has_volume {
+                continue;
+            }
+            out.push(AppStream {
+                id: format!("sink-input:{}", i.index),
+                app: name,
+                direction: Direction::Output,
+                device_id: cstr(&sink.name),
+                volume: max(&i.cvolume),
+                muted: i.muted,
+            });
+        }
+        for o in &outputs {
+            let (Some(name), Some(src)) = (app(&o.props), sources.iter().find(|s| s.index == o.source_index)) else {
+                continue;
+            };
+            if !o.has_volume || src.monitor_of_sink_index.is_some() {
+                continue;
+            }
+            out.push(AppStream {
+                id: format!("source-output:{}", o.index),
+                app: name,
+                direction: Direction::Input,
+                device_id: cstr(&src.name),
+                volume: max(&o.cvolume),
+                muted: o.muted,
+            });
+        }
+        out
+    }
+
+    fn set_app_volume(&mut self, stream_id: &str, volume: f32) -> Result<()> {
+        let (kind, index) = parse_stream_id(stream_id)?;
+        let params = protocol::SetStreamVolumeParams { index, volume: channel_volume(2, volume) };
+        self.with_conn(|c| match kind {
+            "sink-input" => c.ack(Command::SetSinkInputVolume(params)),
+            _ => c.ack(Command::SetSourceOutputVolume(params)),
+        })
+    }
+
+    fn set_app_mute(&mut self, stream_id: &str, muted: bool) -> Result<()> {
+        let (kind, index) = parse_stream_id(stream_id)?;
+        let params = protocol::SetStreamMuteParams { index, mute: muted };
+        self.with_conn(|c| match kind {
+            "sink-input" => c.ack(Command::SetSinkInputMute(params)),
+            _ => c.ack(Command::SetSourceOutputMute(params)),
+        })
+    }
+
     fn card_profiles(&mut self, id: &str, direction: Direction) -> Vec<DeviceProfile> {
         if self.device_cards.is_empty() {
             let _ = self.devices();
@@ -435,9 +508,22 @@ impl AudioBackend for PulseBackend {
     }
 }
 
+fn parse_stream_id(id: &str) -> Result<(&str, u32)> {
+    let (kind, idx) = id.split_once(':').context("bad stream id")?;
+    anyhow::ensure!(kind == "sink-input" || kind == "source-output", "bad stream id {id}");
+    Ok((kind, idx.parse().context("bad stream index")?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_ids() {
+        assert_eq!(parse_stream_id("sink-input:12").unwrap(), ("sink-input", 12));
+        assert!(parse_stream_id("card:1").is_err());
+        assert!(parse_stream_id("sink-input:x").is_err());
+    }
 
     #[test]
     fn volume_roundtrip() {

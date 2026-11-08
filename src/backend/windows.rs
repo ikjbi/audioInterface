@@ -9,7 +9,7 @@
 
 use super::{AudioBackend, clamp_volume};
 use crate::bluetooth::{self, Hints};
-use crate::model::{Device, Direction, Transport};
+use crate::model::{AppStream, Device, Direction, Transport};
 use anyhow::{Context, Result, anyhow};
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -18,9 +18,9 @@ use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Foundation::S_OK;
 use windows::Win32::Media::Audio::Endpoints::{IAudioEndpointVolume, IAudioMeterInformation};
 use windows::Win32::Media::Audio::{
-    AudioSessionStateActive, DEVICE_STATE_ACTIVE, EDataFlow, ERole, IAudioClient, IAudioSessionControl2,
-    IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, PKEY_AudioEndpoint_FormFactor, eCapture,
-    eCommunications, eConsole, eMultimedia, eRender,
+    AudioSessionStateActive, AudioSessionStateExpired, DEVICE_STATE_ACTIVE, EDataFlow, ERole, IAudioClient,
+    IAudioSessionControl2, IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator, ISimpleAudioVolume,
+    MMDeviceEnumerator, PKEY_AudioEndpoint_FormFactor, eCapture, eCommunications, eConsole, eMultimedia, eRender,
 };
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, STGM_READ,
@@ -192,6 +192,37 @@ fn session_users(dev: &IMMDevice) -> Vec<String> {
     out
 }
 
+/// Friendly app name for a session.
+fn session_app_name(ctl2: &IAudioSessionControl2) -> String {
+    unsafe {
+        if ctl2.IsSystemSoundsSession() == S_OK {
+            return "System sounds".into();
+        }
+        let pid = ctl2.GetProcessId().unwrap_or(0);
+        let raw = ctl2
+            .GetSessionIdentifier()
+            .ok()
+            .and_then(|p| {
+                let s = p.to_string().ok();
+                CoTaskMemFree(Some(p.0 as *const c_void));
+                s
+            })
+            .and_then(|id| crate::model::exe_from_windows_session_id(&id))
+            .unwrap_or_else(|| format!("pid {pid}"));
+        crate::model::friendly_app_name(&raw)
+    }
+}
+
+/// Unique id of a session (instance identifier).
+fn session_instance_id(ctl2: &IAudioSessionControl2) -> Option<String> {
+    unsafe {
+        let p = ctl2.GetSessionInstanceIdentifier().ok()?;
+        let s = p.to_string().ok();
+        CoTaskMemFree(Some(p.0 as *const c_void));
+        s
+    }
+}
+
 fn prop_string(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<String> {
     let v = unsafe { store.GetValue(key) }.ok()?;
     let s = v.to_string();
@@ -201,6 +232,47 @@ fn prop_string(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<String> {
 fn prop_u32(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<u32> {
     let v = unsafe { store.GetValue(key) }.ok()?;
     u32::try_from(&v).ok()
+}
+
+impl WasapiBackend {
+    /// All non-expired sessions on all active endpoints, excluding our own.
+    fn all_sessions(&self) -> Vec<(String, Direction, IAudioSessionControl2)> {
+        let own = std::process::id();
+        let mut out = Vec::new();
+        for direction in Direction::ALL {
+            let Ok(collection) = (unsafe { self.enumerator.EnumAudioEndpoints(flow(direction), DEVICE_STATE_ACTIVE) })
+            else {
+                continue;
+            };
+            for i in 0..unsafe { collection.GetCount() }.unwrap_or(0) {
+                let Ok(dev) = (unsafe { collection.Item(i) }) else { continue };
+                let Ok(dev_id) = (unsafe { device_id(&dev) }) else { continue };
+                let Ok(mgr) = (unsafe { dev.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) }) else { continue };
+                let Ok(sessions) = (unsafe { mgr.GetSessionEnumerator() }) else { continue };
+                for j in 0..unsafe { sessions.GetCount() }.unwrap_or(0) {
+                    let Ok(ctl) = (unsafe { sessions.GetSession(j) }) else { continue };
+                    if unsafe { ctl.GetState() }.ok() == Some(AudioSessionStateExpired) {
+                        continue;
+                    }
+                    let Ok(ctl2) = ctl.cast::<IAudioSessionControl2>() else { continue };
+                    if unsafe { ctl2.GetProcessId() }.unwrap_or(0) == own {
+                        continue;
+                    }
+                    out.push((dev_id.clone(), direction, ctl2));
+                }
+            }
+        }
+        out
+    }
+
+    fn find_session_volume(&self, stream_id: &str) -> Result<ISimpleAudioVolume> {
+        for (_, _, ctl2) in self.all_sessions() {
+            if session_instance_id(&ctl2).as_deref() == Some(stream_id) {
+                return ctl2.cast::<ISimpleAudioVolume>().context("session has no volume");
+            }
+        }
+        Err(anyhow!("audio session not found (the app may have closed)"))
+    }
 }
 
 impl AudioBackend for WasapiBackend {
@@ -296,6 +368,36 @@ impl AudioBackend for WasapiBackend {
     fn set_volume(&mut self, id: &str, _direction: Direction, volume: f32) -> Result<()> {
         let ev = self.endpoint_volume(id)?;
         unsafe { ev.SetMasterVolumeLevelScalar(clamp_volume(volume), std::ptr::null())? };
+        Ok(())
+    }
+
+    fn app_streams(&mut self) -> Vec<AppStream> {
+        self.all_sessions()
+            .into_iter()
+            .filter_map(|(device_id, direction, ctl2)| {
+                let vol = ctl2.cast::<ISimpleAudioVolume>().ok()?;
+                let (volume, muted) = unsafe { (vol.GetMasterVolume().ok()?, vol.GetMute().ok()?.as_bool()) };
+                Some(AppStream {
+                    id: session_instance_id(&ctl2)?,
+                    app: session_app_name(&ctl2),
+                    direction,
+                    device_id,
+                    volume,
+                    muted,
+                })
+            })
+            .collect()
+    }
+
+    fn set_app_volume(&mut self, stream_id: &str, volume: f32) -> Result<()> {
+        let v = self.find_session_volume(stream_id)?;
+        unsafe { v.SetMasterVolume(clamp_volume(volume), std::ptr::null())? };
+        Ok(())
+    }
+
+    fn set_app_mute(&mut self, stream_id: &str, muted: bool) -> Result<()> {
+        let v = self.find_session_volume(stream_id)?;
+        unsafe { v.SetMute(muted, std::ptr::null())? };
         Ok(())
     }
 

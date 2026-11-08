@@ -129,6 +129,16 @@ enum Cmd {
         device: String,
         profile: Option<String>,
     },
+    /// List applications playing or recording audio, with their volumes (Windows, Linux).
+    Apps,
+    /// Set an application's volume (0-100). The app is matched by name.
+    AppVolume { app: String, percent: f32 },
+    /// Mute, unmute or toggle an application.
+    AppMute {
+        app: String,
+        #[arg(value_enum, default_value_t = MuteAction::Toggle)]
+        action: MuteAction,
+    },
     /// Show or set an output's left/right balance (-1 = left, 0 = centre, 1 = right).
     Balance {
         device: String,
@@ -376,6 +386,45 @@ fn run(cli: Cli) -> Result<()> {
                     println!("{} {:<40} {}", if p.active { "*" } else { " " }, p.name, p.description);
                 }
             }
+            Ok(())
+        }
+        Cmd::Apps => {
+            let mut b = make_backend(mock)?;
+            let devices = b.devices()?;
+            let streams = b.app_streams();
+            if streams.is_empty() {
+                println!("No application streams (or not supported on this OS).");
+            }
+            for s in streams {
+                let dev = devices.iter().find(|d| d.id == s.device_id).map(|d| d.name.as_str()).unwrap_or("?");
+                println!(
+                    "{:<24} {:>4.0}%{}  {} {}",
+                    s.app,
+                    s.volume * 100.0,
+                    if s.muted { " muted" } else { "      " },
+                    if s.direction == Direction::Output { "→" } else { "←" },
+                    dev
+                );
+            }
+            Ok(())
+        }
+        Cmd::AppVolume { app, percent } => {
+            let mut b = make_backend(mock)?;
+            let s = find_app(&mut *b, &app)?;
+            b.set_app_volume(&s.id, percent / 100.0)?;
+            println!("{} volume: {percent:.0}%", s.app);
+            Ok(())
+        }
+        Cmd::AppMute { app, action } => {
+            let mut b = make_backend(mock)?;
+            let s = find_app(&mut *b, &app)?;
+            let target = match action {
+                MuteAction::On => true,
+                MuteAction::Off => false,
+                MuteAction::Toggle => !s.muted,
+            };
+            b.set_app_mute(&s.id, target)?;
+            println!("{} {}", s.app, if target { "muted" } else { "unmuted" });
             Ok(())
         }
         Cmd::Balance { device, balance } => {
@@ -662,6 +711,18 @@ fn run_record(
             return Ok(());
         }
     }
+}
+
+/// Find an application stream by (part of) its name.
+fn find_app(b: &mut dyn AudioBackend, query: &str) -> Result<audio_interface::model::AppStream> {
+    let q = query.to_lowercase();
+    let streams = b.app_streams();
+    streams.iter().find(|s| s.id == query || s.app.to_lowercase().contains(&q)).cloned().with_context(|| {
+        format!(
+            "no app matches \"{query}\" (running: {})",
+            streams.iter().map(|s| s.app.as_str()).collect::<Vec<_>>().join(", ")
+        )
+    })
 }
 
 /// Resolve a device by query, or the default for the direction.

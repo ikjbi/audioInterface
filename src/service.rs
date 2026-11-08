@@ -33,6 +33,9 @@ pub enum Request {
     SetDefault(DeviceKey),
     /// Windows: make this the default communications device only.
     SetCommsDefault(DeviceKey),
+    /// Per-app volume / mute (stream id from `AppStream::id`).
+    SetAppVolume(String, f32),
+    SetAppMute(String, bool),
     /// Switch the card behind a device to a profile (Linux), e.g. A2DP ↔ headset.
     SetCardProfile(DeviceKey, String),
     /// Left/right balance (-1 ..= 1).
@@ -87,6 +90,8 @@ pub struct Snapshot {
     pub events: VecDeque<Event>,
     /// Level cells for every metered device.
     pub levels: HashMap<DeviceKey, Arc<LevelCell>>,
+    /// Per-application streams (Windows, Linux).
+    pub app_streams: Vec<crate::model::AppStream>,
     /// Card profiles per device (Linux; empty elsewhere).
     pub card_profiles: HashMap<DeviceKey, Vec<crate::model::DeviceProfile>>,
     /// Sample rates each device can be switched to (macOS; empty elsewhere).
@@ -377,6 +382,22 @@ impl Worker {
                 self.stop_recording(&key);
                 return;
             }
+            Request::SetAppVolume(id, v) => {
+                if self.ensure_backend()
+                    && let Err(e) = self.backend.as_mut().unwrap().set_app_volume(&id, v)
+                {
+                    self.log(EventKind::Error, format!("App volume: {e:#}"));
+                }
+                return;
+            }
+            Request::SetAppMute(id, m) => {
+                if self.ensure_backend()
+                    && let Err(e) = self.backend.as_mut().unwrap().set_app_mute(&id, m)
+                {
+                    self.log(EventKind::Error, format!("App mute: {e:#}"));
+                }
+                return;
+            }
             Request::Refresh | Request::Shutdown => return,
             _ => {}
         }
@@ -485,6 +506,7 @@ impl Worker {
         } else {
             None
         };
+        let app_streams = self.backend.as_mut().unwrap().app_streams();
         let windows: HashMap<DeviceKey, Arc<crate::levels::SampleWindow>> =
             self.devices.iter().filter_map(|d| self.meters.window(&d.key()).map(|w| (d.key(), w))).collect();
         let native: BTreeSet<DeviceKey> = self.native_cells.keys().cloned().collect();
@@ -505,6 +527,7 @@ impl Worker {
         s.devices = devices;
         s.levels = levels;
         s.windows = windows;
+        s.app_streams = app_streams;
         if let Some((r, p)) = rates {
             s.sample_rates = r;
             s.card_profiles = p;

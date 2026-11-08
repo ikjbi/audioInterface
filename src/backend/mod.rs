@@ -3,7 +3,7 @@
 //! `cpal` (used for metering) can't change system settings, so each OS gets
 //! a small native backend that implements [`AudioBackend`].
 
-use crate::model::{Device, DeviceProfile, Direction};
+use crate::model::{AppStream, Device, DeviceProfile, Direction};
 use anyhow::Result;
 
 #[cfg(target_os = "linux")]
@@ -46,6 +46,19 @@ pub trait AudioBackend {
     /// Change the device sample rate (macOS).
     fn set_sample_rate(&mut self, _id: &str, _direction: Direction, _rate: u32) -> Result<()> {
         anyhow::bail!("changing the sample rate is not supported on this OS")
+    }
+
+    /// Per-application streams (Windows sessions, PulseAudio streams).
+    fn app_streams(&mut self) -> Vec<AppStream> {
+        Vec::new()
+    }
+
+    fn set_app_volume(&mut self, _stream_id: &str, _volume: f32) -> Result<()> {
+        anyhow::bail!("per-app volume is not supported on this OS")
+    }
+
+    fn set_app_mute(&mut self, _stream_id: &str, _muted: bool) -> Result<()> {
+        anyhow::bail!("per-app mute is not supported on this OS")
     }
 
     /// Hardware profiles of the card behind this device (PulseAudio). Empty if

@@ -97,7 +97,7 @@ pavucontrol (Linux). Ordered by value. Platform limits are noted where an OS has
 - [x] 11.5 Start at login (per user: Windows HKCU Run, macOS LaunchAgent, Linux autostart)
 - [x] 11.6 Separate "communications" default (Windows has a separate default for calls)
 - [x] 11.7 Custom device names and hiding devices
-- [ ] 11.8 Per-app volume and mute mixer (Windows sessions, PulseAudio streams; macOS has no public API, so it's shown read-only)
+- [x] 11.8 Per-app volume and mute mixer (Windows sessions, PulseAudio streams; macOS has no public API, so it's shown read-only)
 
 **Diagnostics & testing**
 - [x] 11.9 Mic test: record 5 s and play it back on the default output

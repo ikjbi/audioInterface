@@ -111,6 +111,20 @@ pub struct Device {
     pub balance: Option<f32>,
 }
 
+/// One application's audio stream on a device (per-app mixer).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AppStream {
+    /// Opaque, backend-specific stream id.
+    pub id: String,
+    /// Friendly application name.
+    pub app: String,
+    pub direction: Direction,
+    /// The device the stream plays to / records from.
+    pub device_id: String,
+    pub volume: f32,
+    pub muted: bool,
+}
+
 /// A hardware profile of the card behind a device (Linux/PulseAudio), e.g.
 /// Bluetooth "A2DP" (high quality, no mic) vs "Headset" (HFP, mic + call quality).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

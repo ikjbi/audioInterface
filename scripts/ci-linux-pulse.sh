@@ -179,6 +179,19 @@ assert -10 < max_db < -3, max_db
 print("mic test playback OK")
 EOF4
 
+step "per-app mixer"
+pacat --playback --device=ci_headphones --format=s16le --rate=48000 --channels=2 tone.raw &
+PA=$!
+sleep 1
+$BIN apps | tee apps.txt
+grep -qi "pacat\|paplay\|tone" apps.txt || { pactl list sink-inputs short; fail "player not listed"; }
+APP=$(head -1 apps.txt | awk '{print $1}')
+$BIN app-volume "$APP" 50
+pactl list sink-inputs | grep -q "50%" || { pactl list sink-inputs; fail "app volume not applied"; }
+$BIN app-mute "$APP" on
+pactl list sink-inputs | grep -q "Mute: yes" || fail "app not muted"
+kill $PA 2>/dev/null || true
+
 step "errors"
 if $BIN set-default output does-not-exist 2>err.txt; then fail "expected failure"; fi
 grep -q "no output device matches" err.txt || { cat err.txt; fail "bad error message"; }

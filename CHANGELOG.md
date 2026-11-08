@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Per-app mixer** (Windows, Linux): an "Apps" section on each device with per-application volume
+  and mute; CLI `apps`, `app-volume`, `app-mute`. macOS has no public API for it.
 - **Loudness (EBU R128)**: momentary (400 ms) and short-term (3 s) LUFS for metered inputs, using
   BS.1770 K-weighting computed in the capture callback (verified against the EBU 1 kHz reference).
 - **Single instance**: launching the app again brings the running window to the front.

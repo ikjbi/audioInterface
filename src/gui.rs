@@ -75,6 +75,7 @@ struct View {
     windows: HashMap<DeviceKey, Arc<crate::levels::SampleWindow>>,
     sample_rates: HashMap<DeviceKey, Vec<u32>>,
     card_profiles: HashMap<DeviceKey, Vec<crate::model::DeviceProfile>>,
+    app_streams: Vec<crate::model::AppStream>,
     recordings: Vec<ActiveRecording>,
     finished: Vec<FinishedRecording>,
 }
@@ -213,6 +214,7 @@ impl App {
             windows: snap.windows.clone(),
             sample_rates: snap.sample_rates.clone(),
             card_profiles: snap.card_profiles.clone(),
+            app_streams: snap.app_streams.clone(),
             recordings: snap.recordings.clone(),
             finished: snap.finished.iter().cloned().collect(),
         };
@@ -638,6 +640,35 @@ impl App {
                         );
                     }
                 });
+            }
+
+            // Per-app mixer.
+            let streams: Vec<crate::model::AppStream> = self
+                .view
+                .app_streams
+                .iter()
+                .filter(|s| s.device_id == d.id && s.direction == d.direction)
+                .cloned()
+                .collect();
+            if !streams.is_empty() {
+                egui::CollapsingHeader::new(RichText::new(format!("Apps ({})", streams.len())).small())
+                    .id_salt(("apps", &key))
+                    .show(ui, |ui| {
+                        for s in streams {
+                            ui.horizontal(|ui| {
+                                let icon = if s.muted { "🔇" } else { "🔊" };
+                                if ui.small_button(icon).on_hover_text(if s.muted { "Unmute" } else { "Mute" }).clicked() {
+                                    self.service.send(Request::SetAppMute(s.id.clone(), !s.muted));
+                                }
+                                ui.label(RichText::new(&s.app).small());
+                                let mut pct = s.volume * 100.0;
+                                ui.spacing_mut().slider_width = (ui.available_width() - 60.0).max(60.0);
+                                if ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).suffix("%").fixed_decimals(0)).changed() {
+                                    self.service.send(Request::SetAppVolume(s.id.clone(), pct / 100.0));
+                                }
+                            });
+                        }
+                    });
             }
 
             // Running test tools.
