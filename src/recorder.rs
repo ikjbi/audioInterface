@@ -312,9 +312,8 @@ mod tests {
 
         // Simulate 3.5 s of ticks at 0.1 amplitude, with a gain change midway.
         let t0 = rec.started;
-        let mut blocks = 0;
         for i in 1..=35u64 {
-            blocks += 1;
+            let blocks = i;
             if i == 20 {
                 dev.volume = Some(0.25);
                 rec.update_device(Some(&dev));

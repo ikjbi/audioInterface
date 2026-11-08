@@ -238,7 +238,8 @@ pub fn analyze_with(samples: &[Sample], p: &Params) -> Report {
     }
 
     // Problem periods.
-    let kinds: [(PeriodKind, fn(&Sample) -> bool); 3] = [
+    type Pred = fn(&Sample) -> bool;
+    let kinds: [(PeriodKind, Pred); 3] = [
         (PeriodKind::Muted, |s| s.muted == Some(true)),
         (PeriodKind::SignalLost, |s| s.status == "lost"),
         (PeriodKind::DigitalSilence, |s| s.status == "silent"),
