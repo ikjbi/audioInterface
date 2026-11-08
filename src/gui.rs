@@ -419,8 +419,11 @@ impl App {
                 );
             }
         } else if let Some(err) = self.view.meter_errors.get(&key) {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(format!("Meter unavailable: {err}")).small().color(YELLOW));
+                if err.contains("Microphone") && ui.small_button("Open privacy settings").clicked() {
+                    open_mic_privacy_settings();
+                }
                 if user_monitored && ui.small_button("✕").clicked() {
                     self.service.send(Request::SetMonitored(key.clone(), false));
                 }
@@ -673,6 +676,22 @@ fn draw_history(ui: &mut egui::Ui, h: &LevelHistory, floor_db: f32, size: Vec2) 
         painter.rect_filled(peak_rect, 0.0, color.gamma_multiply(0.35));
         let rms_rect = egui::Rect::from_min_max(egui::pos2(x0, y_at(rms)), egui::pos2(x1, rect.bottom()));
         painter.rect_filled(rms_rect, 0.0, color.gamma_multiply(0.9));
+    }
+}
+
+/// Open the OS page where microphone access is granted.
+fn open_mic_privacy_settings() {
+    let result = if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+            .spawn()
+    } else if cfg!(windows) {
+        std::process::Command::new("cmd").args(["/C", "start", "ms-settings:privacy-microphone"]).spawn()
+    } else {
+        return;
+    };
+    if let Err(e) = result {
+        log::warn!("could not open privacy settings: {e}");
     }
 }
 
