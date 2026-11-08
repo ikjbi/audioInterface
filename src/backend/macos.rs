@@ -345,6 +345,7 @@ impl CoreAudioBackend {
             muted: self.read_mute(id, direction),
             hands_free,
             in_use_by: Vec::new(),
+            is_comms_default: false,
         })
     }
 }

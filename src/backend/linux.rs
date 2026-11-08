@@ -229,6 +229,7 @@ impl AudioBackend for PulseBackend {
                 muted: Some(muted),
                 hands_free,
                 in_use_by: Vec::new(),
+                is_comms_default: false,
             });
         };
 

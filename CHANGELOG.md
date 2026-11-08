@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Windows communications device**: "CALLS" badge, "Use for calls only" in the device menu and
+  `set-default --comms`, to send Teams/Zoom to a headset while media stays on speakers.
 - **Rename and hide devices**: right-click (or double-click) a device name; hidden devices can be
   restored in Settings.
 - **Start at login** (Settings → General): per user on all OSes (HKCU Run key, LaunchAgent, XDG

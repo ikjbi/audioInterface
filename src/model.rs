@@ -95,6 +95,10 @@ pub struct Device {
     /// (output) this device, as friendly names. Our own streams are excluded.
     #[serde(default)]
     pub in_use_by: Vec<String>,
+    /// Windows only: this is the default *communications* device (used by
+    /// Teams, Zoom, …), which can differ from the normal default.
+    #[serde(default)]
+    pub is_comms_default: bool,
 }
 
 impl Device {
@@ -216,6 +220,7 @@ pub(crate) fn test_device(id: &str, name: &str, direction: Direction) -> Device 
         muted: Some(false),
         hands_free: false,
         in_use_by: Vec::new(),
+        is_comms_default: false,
     }
 }
 

@@ -93,11 +93,31 @@ impl WasapiBackend {
         unsafe { self.enumerator.GetDevice(&HSTRING::from(id)) }.with_context(|| format!("no device with id {id}"))
     }
 
-    fn default_id(&self, direction: Direction) -> Option<String> {
+    fn default_id(&self, direction: Direction, role: ERole) -> Option<String> {
         unsafe {
-            let dev = self.enumerator.GetDefaultAudioEndpoint(flow(direction), eConsole).ok()?;
+            let dev = self.enumerator.GetDefaultAudioEndpoint(flow(direction), role).ok()?;
             device_id(&dev).ok()
         }
+    }
+
+    fn set_roles(&mut self, id: &str, direction: Direction, roles: &[ERole]) -> Result<()> {
+        // Make sure it exists (and is the right direction) for a clear error.
+        let exists = self.devices()?.iter().any(|d| d.id == id && d.direction == direction);
+        if !exists {
+            return Err(anyhow!("no active {direction} device with id {id}"));
+        }
+        unsafe {
+            let policy: IPolicyConfig =
+                CoCreateInstance(&CLSID_POLICY_CONFIG_CLIENT, None, CLSCTX_ALL).context("create PolicyConfig")?;
+            let wide = HSTRING::from(id);
+            for role in roles {
+                policy
+                    .SetDefaultEndpoint(PCWSTR(wide.as_ptr()), *role)
+                    .ok()
+                    .with_context(|| format!("SetDefaultEndpoint role {}", role.0))?;
+            }
+        }
+        Ok(())
     }
 
     fn endpoint_volume(&self, id: &str) -> Result<IAudioEndpointVolume> {
@@ -174,7 +194,8 @@ impl AudioBackend for WasapiBackend {
     fn devices(&mut self) -> Result<Vec<Device>> {
         let mut out = Vec::new();
         for direction in Direction::ALL {
-            let default = self.default_id(direction);
+            let default = self.default_id(direction, eConsole);
+            let comms_default = self.default_id(direction, eCommunications);
             let collection = unsafe { self.enumerator.EnumAudioEndpoints(flow(direction), DEVICE_STATE_ACTIVE)? };
             let count = unsafe { collection.GetCount()? };
             for i in 0..count {
@@ -204,6 +225,7 @@ impl AudioBackend for WasapiBackend {
                 let volume = ev.as_ref().and_then(|e| unsafe { e.GetMasterVolumeLevelScalar() }.ok());
                 let muted = ev.as_ref().and_then(|e| unsafe { e.GetMute() }.ok()).map(|b| b.as_bool());
 
+                let is_comms_default = comms_default.as_deref() == Some(id.as_str());
                 out.push(Device {
                     is_default: default.as_deref() == Some(id.as_str()),
                     id,
@@ -214,6 +236,7 @@ impl AudioBackend for WasapiBackend {
                     muted,
                     hands_free,
                     in_use_by: session_users(&dev),
+                    is_comms_default,
                 });
             }
         }
@@ -221,25 +244,17 @@ impl AudioBackend for WasapiBackend {
     }
 
     fn set_default(&mut self, id: &str, direction: Direction) -> Result<()> {
-        // Make sure it exists (and is the right direction) for a clear error.
-        let exists = self.devices()?.iter().any(|d| d.id == id && d.direction == direction);
-        if !exists {
-            return Err(anyhow!("no active {direction} device with id {id}"));
-        }
-        unsafe {
-            let policy: IPolicyConfig =
-                CoCreateInstance(&CLSID_POLICY_CONFIG_CLIENT, None, CLSCTX_ALL).context("create PolicyConfig")?;
-            let wide = HSTRING::from(id);
-            // Set all three roles, which is what "Set as Default Device" in the
-            // Sound control panel does.
-            for role in [eConsole, eMultimedia, eCommunications] {
-                policy
-                    .SetDefaultEndpoint(PCWSTR(wide.as_ptr()), role)
-                    .ok()
-                    .with_context(|| format!("SetDefaultEndpoint role {}", role.0))?;
-            }
-        }
-        Ok(())
+        // All three roles, which is what "Set as Default Device" in the Sound
+        // control panel does.
+        self.set_roles(id, direction, &[eConsole, eMultimedia, eCommunications])
+    }
+
+    fn supports_comms_role(&self) -> bool {
+        true
+    }
+
+    fn set_comms_default(&mut self, id: &str, direction: Direction) -> Result<()> {
+        self.set_roles(id, direction, &[eCommunications])
     }
 
     fn set_volume(&mut self, id: &str, _direction: Direction, volume: f32) -> Result<()> {

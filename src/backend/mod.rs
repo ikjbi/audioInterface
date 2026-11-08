@@ -28,6 +28,16 @@ pub trait AudioBackend {
     /// Make `id` the system default device for `direction`.
     fn set_default(&mut self, id: &str, direction: Direction) -> Result<()>;
 
+    /// Whether the OS has a separate default device for communications (Windows).
+    fn supports_comms_role(&self) -> bool {
+        false
+    }
+
+    /// Make `id` the default *communications* device only (Windows).
+    fn set_comms_default(&mut self, _id: &str, _direction: Direction) -> Result<()> {
+        anyhow::bail!("this OS has no separate communications device")
+    }
+
     /// Set volume/gain as a scalar in `0.0..=1.0`.
     fn set_volume(&mut self, id: &str, direction: Direction, volume: f32) -> Result<()>;
 

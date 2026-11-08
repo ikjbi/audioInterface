@@ -56,6 +56,7 @@ pub fn run(service: Service, settings: Settings, settings_path: Option<PathBuf>,
 #[derive(Default)]
 struct View {
     api: &'static str,
+    supports_comms: bool,
     meter_host: &'static str,
     devices: Vec<Device>,
     error: Option<String>,
@@ -169,6 +170,7 @@ impl App {
         let snap = self.service.snapshot();
         self.view = View {
             api: snap.api,
+            supports_comms: snap.supports_comms,
             meter_host: snap.meter_host,
             devices: snap.devices.clone(),
             error: snap.error.clone(),
@@ -384,6 +386,16 @@ impl App {
                                 self.settings_changed();
                                 ui.close();
                             }
+                            if self.view.supports_comms
+                                && !d.is_comms_default
+                                && ui
+                                    .button("📞 Use for calls only")
+                                    .on_hover_text("Make this the default communications device (Teams, Zoom, …) without changing the normal default")
+                                    .clicked()
+                            {
+                                self.service.send(Request::SetCommsDefault(key.clone()));
+                                ui.close();
+                            }
                             if ui.button("🙈 Hide this device").clicked() {
                                 self.settings.set_hidden(d, true);
                                 self.settings_changed();
@@ -398,6 +410,10 @@ impl App {
                 }
                 if d.is_default {
                     ui.label(RichText::new("DEFAULT").small().strong().color(GREEN));
+                }
+                if d.is_comms_default && !d.is_default {
+                    ui.label(RichText::new("CALLS").small().strong().color(BLUE))
+                        .on_hover_text("Default communications device: Teams, Zoom etc. use this one");
                 }
                 if !d.in_use_by.is_empty() {
                     let verb = if d.direction == Direction::Input { "recording" } else { "playing" };

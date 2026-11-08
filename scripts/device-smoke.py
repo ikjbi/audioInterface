@@ -92,6 +92,15 @@ for direction in ("input", "output"):
         now = [x["id"] for x in devices() if x["direction"] == direction and x["is_default"]]
         check(now == [original_default], "original default restored")
 
+# Windows: the separate communications default.
+if sys.platform == "win32":
+    for direction in ("input", "output"):
+        devs = [d for d in devices() if d["direction"] == direction]
+        if devs:
+            cli("set-default", direction, devs[0]["id"], "--comms")
+            now = [x["id"] for x in devices() if x["direction"] == direction and x.get("is_comms_default")]
+            check(now == [devs[0]["id"]], f"communications default {direction} -> {devs[0]['name']!r}")
+
 if failures:
     print(f"\n{len(failures)} FAILURE(S)")
     sys.exit(1)

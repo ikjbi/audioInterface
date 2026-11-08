@@ -53,6 +53,9 @@ enum Cmd {
         direction: Direction,
         /// Device ID, exact name, or a unique part of the name.
         device: String,
+        /// Windows: only set the default *communications* device (used by Teams, Zoom, …).
+        #[arg(long)]
+        comms: bool,
     },
     /// Print or set a device's volume (0-100).
     Volume {
@@ -205,10 +208,15 @@ fn run(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::SetDefault { direction, device } => {
+        Cmd::SetDefault { direction, device, comms } => {
             let mut b = make_backend(mock)?;
             let devices = b.devices()?;
             let d = resolve_device(&devices, direction, &device)?;
+            if comms {
+                b.set_comms_default(&d.id, direction)?;
+                println!("Default communications {direction} set to \"{}\"", d.name);
+                return Ok(());
+            }
             b.set_default(&d.id, direction)?;
             println!("Default {direction} set to \"{}\"", d.name);
             if d.transport == audio_interface::model::Transport::Bluetooth && direction == Direction::Input {
@@ -479,6 +487,9 @@ fn print_table(api: &str, devices: &[Device]) {
             }
             if d.hands_free {
                 flags.push("hands-free");
+            }
+            if d.is_comms_default && !d.is_default {
+                flags.push("calls default");
             }
             println!(
                 "  {} {:<40} {:>5}  {:<11} {}",

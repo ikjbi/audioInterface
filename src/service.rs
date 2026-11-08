@@ -31,6 +31,8 @@ const MAX_EVENTS: usize = 200;
 #[derive(Debug, Clone)]
 pub enum Request {
     SetDefault(DeviceKey),
+    /// Windows: make this the default communications device only.
+    SetCommsDefault(DeviceKey),
     SetVolume(DeviceKey, f32),
     SetMute(DeviceKey, bool),
     /// Start/stop metering a device on user request.
@@ -66,6 +68,8 @@ pub struct Event {
 #[derive(Default)]
 pub struct Snapshot {
     pub api: &'static str,
+    /// The OS has a separate communications default (Windows).
+    pub supports_comms: bool,
     pub meter_host: &'static str,
     pub devices: Vec<Device>,
     /// Backend-level error (e.g. sound server not running).
@@ -261,9 +265,11 @@ impl Worker {
         match (self.factory)() {
             Ok(b) => {
                 let api = b.api_name();
+                let comms = b.supports_comms_role();
                 self.backend = Some(b);
                 let mut s = self.shared();
                 s.api = api;
+                s.supports_comms = comms;
                 s.error = None;
                 s.log(EventKind::Info, format!("Connected to {api}"));
                 true
@@ -315,7 +321,10 @@ impl Worker {
             return;
         }
         let name = match &req {
-            Request::SetDefault(k) | Request::SetVolume(k, _) | Request::SetMute(k, _) => self.name_of(k),
+            Request::SetDefault(k)
+            | Request::SetCommsDefault(k)
+            | Request::SetVolume(k, _)
+            | Request::SetMute(k, _) => self.name_of(k),
             _ => String::new(),
         };
         let backend = self.backend.as_mut().unwrap();
@@ -323,6 +332,9 @@ impl Worker {
             Request::SetDefault(k) => {
                 backend.set_default(&k.id, k.direction).map(|_| format!("Default {} set to {name}", k.direction))
             }
+            Request::SetCommsDefault(k) => backend
+                .set_comms_default(&k.id, k.direction)
+                .map(|_| format!("Default communications {} set to {name}", k.direction)),
             Request::SetVolume(k, v) => backend.set_volume(&k.id, k.direction, *v).map(|_| String::new()),
             Request::SetMute(k, m) => backend
                 .set_mute(&k.id, k.direction, *m)
