@@ -138,6 +138,12 @@ impl Settings {
         }
     }
 
+    /// Read settings from a file, failing on invalid content (for import).
+    pub fn import(path: &Path) -> Result<Settings> {
+        let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        serde_json::from_str(&text).with_context(|| format!("{} is not a valid settings file", path.display()))
+    }
+
     /// Save atomically (write a temp file, then rename).
     pub fn save(&self, path: &Path) -> Result<()> {
         if let Some(dir) = path.parent() {

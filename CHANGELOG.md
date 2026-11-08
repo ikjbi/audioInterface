@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Single instance**: launching the app again brings the running window to the front.
+- **Diagnostics**: "Copy diagnostics" (Settings → Support) and `audio-interface diagnostics`.
+- **Settings export/import**: `settings export|import|path`, plus export and open-folder buttons.
 - **Theme**: system, light or dark (Settings → General). Chart colors adapt to the theme.
 - **Card profiles on Linux**, e.g. switch a Bluetooth headset between A2DP (high quality) and
   headset/HFP (mic): device menu → Profile, or `card-profile <dir> <device> [profile]`.

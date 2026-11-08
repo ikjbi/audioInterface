@@ -111,10 +111,10 @@ pavucontrol (Linux). Ordered by value. Platform limits are noted where an OS has
 - [ ] 11.17 Loudness meter (EBU R128 momentary/short-term LUFS)
 
 **App quality**
-- [ ] 11.18 Single instance (a second launch focuses the first)
+- [x] 11.18 Single instance (a second launch focuses the first)
 - [x] 11.19 Light/dark/system theme
-- [ ] 11.20 Diagnostics bundle: copy system/device info + recent log for bug reports
-- [ ] 11.21 Settings import/export
+- [x] 11.20 Diagnostics bundle: copy system/device info + recent log for bug reports
+- [x] 11.21 Settings import/export
 
 ---
 

@@ -46,6 +46,11 @@ pub fn run(service: Service, settings: Settings, settings_path: Option<PathBuf>,
             let desktop = crate::desktop::Desktop::new(&cc.egui_ctx, &settings, with_tray);
             let mut app = App::new(service, settings, settings_path);
             app.desktop = Some(desktop);
+            if with_tray {
+                let ctx = cc.egui_ctx.clone();
+                app.show_requested =
+                    crate::single_instance::listen(crate::single_instance::port(), move || ctx.request_repaint());
+            }
             app.start_minimized = opts.minimized;
             if opts.minimized {
                 app.splash = crate::splash::Splash::skipped();
@@ -101,6 +106,8 @@ struct App {
     hidden: bool,
     /// Quit was chosen (don't hide to tray on close).
     quitting: bool,
+    /// Set when another launch asked us to show the window.
+    show_requested: Option<Arc<AtomicBool>>,
     /// Devices with the spectrum analyzer open, and their smoothed bands.
     spectra: HashMap<DeviceKey, Vec<f32>>,
     analyzer: crate::spectrum::Analyzer,
@@ -137,6 +144,7 @@ impl App {
             desktop: None,
             hidden: false,
             quitting: false,
+            show_requested: None,
             tools: Vec::new(),
             spectra: HashMap::new(),
             analyzer: crate::spectrum::Analyzer::new(),
@@ -995,6 +1003,42 @@ impl App {
             }
 
             ui.separator();
+            ui.heading("Support");
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("📋 Copy diagnostics").on_hover_text("Version, OS, devices, settings and recent events, for bug reports").clicked() {
+                    let events: Vec<String> = self.view.events.iter().rev().map(|e| e.text.clone()).collect();
+                    let text = crate::diagnostics::report(&crate::diagnostics::Inputs {
+                        api: self.view.api,
+                        meter_host: self.view.meter_host,
+                        devices: &self.view.devices,
+                        settings: &self.settings,
+                        events: &events,
+                        backend_error: self.view.error.as_deref(),
+                    });
+                    ui.ctx().copy_text(text);
+                }
+                if ui.button("Export settings…").on_hover_text("Saves to Documents/audio-interface-settings.json").clicked() {
+                    let dest = directories::UserDirs::new()
+                        .and_then(|u| u.document_dir().map(|d| d.join("audio-interface-settings.json")))
+                        .unwrap_or_else(|| PathBuf::from("audio-interface-settings.json"));
+                    match self.settings.save(&dest) {
+                        Ok(()) => crate::gui_recordings::open_path(dest.parent().unwrap_or(&dest)),
+                        Err(e) => log::error!("export settings: {e:#}"),
+                    }
+                }
+                if let Some(p) = &self.settings_path
+                    && ui.button("Open settings folder").clicked()
+                {
+                    crate::gui_recordings::open_path(p.parent().unwrap_or(p));
+                }
+            });
+            ui.label(
+                RichText::new("To import settings: audio-interface settings import <file> (with the app closed).")
+                    .small()
+                    .color(MUTED_TEXT),
+            );
+
+            ui.separator();
             if let Some(p) = &self.settings_path {
                 ui.label(RichText::new(format!("Settings file: {}", p.display())).small().color(MUTED_TEXT));
             }
@@ -1080,6 +1124,9 @@ impl eframe::App for App {
         };
         if ctx.options(|o| o.theme_preference) != theme {
             ctx.set_theme(theme);
+        }
+        if self.show_requested.as_ref().is_some_and(|f| f.swap(false, Ordering::SeqCst)) {
+            self.handle_desktop_command(ctx, crate::desktop::Command::ShowWindow);
         }
         if let Some(mut desktop) = self.desktop.take() {
             desktop.update_hotkeys(&self.settings);

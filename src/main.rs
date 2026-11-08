@@ -157,6 +157,13 @@ enum Cmd {
         #[command(subcommand)]
         action: ProfileCmd,
     },
+    /// Print a diagnostics report (for bug reports).
+    Diagnostics,
+    /// Export or import settings (profiles, gain locks, preferences, …).
+    Settings {
+        #[command(subcommand)]
+        action: SettingsCmd,
+    },
     /// Write the app icon as a PNG (used when packaging).
     #[command(hide = true)]
     ExportIcon {
@@ -164,6 +171,16 @@ enum Cmd {
         #[arg(long, default_value_t = 1024)]
         size: u32,
     },
+}
+
+#[derive(Subcommand)]
+enum SettingsCmd {
+    /// Write the current settings to a file.
+    Export { file: std::path::PathBuf },
+    /// Replace the current settings with a file's contents.
+    Import { file: std::path::PathBuf },
+    /// Print where the settings file is.
+    Path,
 }
 
 #[derive(Subcommand)]
@@ -233,6 +250,14 @@ fn run(cli: Cli) -> Result<()> {
     let settings_path = cli.settings.clone().or_else(Settings::default_path);
     match cli.command.unwrap_or(Cmd::Gui) {
         Cmd::Gui => {
+            // Single instance: if the app is already running, bring it to the front.
+            if !mock && std::env::var_os(audio_interface::gui::SCREENSHOT_ENV).is_none() {
+                let port = audio_interface::single_instance::port();
+                if audio_interface::single_instance::signal_existing(port) {
+                    eprintln!("Audio Interface is already running; showing its window.");
+                    return Ok(());
+                }
+            }
             let path = settings_path;
             let settings = path.as_deref().map(Settings::load).unwrap_or_default();
             let factory = make_factory(mock);
@@ -400,6 +425,44 @@ fn run(cli: Cli) -> Result<()> {
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
+        }
+        Cmd::Diagnostics => {
+            let settings = settings_path.as_deref().map(Settings::load).unwrap_or_default();
+            let (api, devices, err) = match make_backend(mock) {
+                Ok(mut b) => match b.devices() {
+                    Ok(d) => (b.api_name().to_string(), d, None),
+                    Err(e) => (b.api_name().to_string(), Vec::new(), Some(format!("{e:#}"))),
+                },
+                Err(e) => (String::new(), Vec::new(), Some(format!("{e:#}"))),
+            };
+            print!(
+                "{}",
+                audio_interface::diagnostics::report(&audio_interface::diagnostics::Inputs {
+                    api: &api,
+                    meter_host: MeterEngine::new().host_name(),
+                    devices: &devices,
+                    settings: &settings,
+                    events: &[],
+                    backend_error: err.as_deref(),
+                })
+            );
+            Ok(())
+        }
+        Cmd::Settings { action } => {
+            let path = settings_path.context("no settings location available")?;
+            match action {
+                SettingsCmd::Path => println!("{}", path.display()),
+                SettingsCmd::Export { file } => {
+                    Settings::load(&path).save(&file)?;
+                    println!("Exported settings to {}", file.display());
+                }
+                SettingsCmd::Import { file } => {
+                    let s = Settings::import(&file)?;
+                    s.save(&path)?;
+                    println!("Imported settings from {} (restart the app if it is running)", file.display());
+                }
+            }
+            Ok(())
         }
         Cmd::Profile { action } => {
             let path = settings_path.context("no settings location available")?;
