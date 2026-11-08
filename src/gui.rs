@@ -70,6 +70,7 @@ struct App {
     screenshot: Option<(PathBuf, Arc<AtomicBool>)>,
     recordings_panel: RecordingsPanel,
     splash: crate::splash::Splash,
+    new_profile_name: String,
 }
 
 const GREEN: Color32 = Color32::from_rgb(0x3f, 0xb9, 0x50);
@@ -94,6 +95,7 @@ impl App {
             view: View::default(),
             frame_count: 0,
             splash: crate::splash::Splash::new(),
+            new_profile_name: String::new(),
             recordings_panel: RecordingsPanel {
                 open: std::env::var("AUDIO_INTERFACE_OPEN").is_ok_and(|v| v == "recordings"),
                 ..RecordingsPanel::default()
@@ -194,6 +196,9 @@ impl App {
                 {
                     self.recordings_panel.open = !self.recordings_panel.open;
                 }
+                ui.menu_button("🎚 Profiles", |ui| self.profiles_menu(ui))
+                    .response
+                    .on_hover_text("Save and switch between setups, e.g. \"Calls\" and \"Music\"");
                 if ui.button("⟳ Refresh").clicked() {
                     self.service.send(Request::Refresh);
                 }
@@ -208,6 +213,59 @@ impl App {
                     self.settings_changed();
                 }
             });
+        });
+    }
+
+    fn profiles_menu(&mut self, ui: &mut egui::Ui) {
+        ui.set_min_width(260.0);
+        if self.settings.profiles.is_empty() {
+            ui.label(RichText::new("No profiles yet. Save your current setup below.").small().color(MUTED_TEXT));
+        }
+        let mut apply = None;
+        let mut delete = None;
+        for p in &self.settings.profiles {
+            ui.horizontal(|ui| {
+                let summary = format!(
+                    "in: {} · out: {}",
+                    p.default_input.as_ref().map(|r| r.name.as_str()).unwrap_or("–"),
+                    p.default_output.as_ref().map(|r| r.name.as_str()).unwrap_or("–")
+                );
+                if ui.button(format!("▶ {}", p.name)).on_hover_text(summary).clicked() {
+                    apply = Some(p.clone());
+                }
+                if ui.small_button("✕").on_hover_text("Delete this profile").clicked() {
+                    delete = Some(p.name.clone());
+                }
+            });
+        }
+        if let Some(p) = apply {
+            self.settings.gain_locks = p.gain_locks.clone();
+            self.settings_changed();
+            self.service.send(Request::ApplyProfile(p));
+            ui.close();
+        }
+        if let Some(name) = delete {
+            self.settings.delete_profile(&name);
+            self.settings_changed();
+        }
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.new_profile_name)
+                    .hint_text("Name, e.g. Calls")
+                    .desired_width(150.0),
+            );
+            let name = self.new_profile_name.trim().to_string();
+            if ui
+                .add_enabled(!name.is_empty(), egui::Button::new("Save current"))
+                .on_hover_text("Saves the default devices, volumes, mutes and gain locks")
+                .clicked()
+            {
+                let profile = crate::profiles::capture(&name, &self.view.devices, &self.settings);
+                self.settings.save_profile(profile);
+                self.settings_changed();
+                self.new_profile_name.clear();
+            }
         });
     }
 

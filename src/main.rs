@@ -106,6 +106,11 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Manage profiles (saved setups of default devices, volumes, mutes, gain locks).
+    Profile {
+        #[command(subcommand)]
+        action: ProfileCmd,
+    },
     /// Write the app icon as a PNG (used when packaging).
     #[command(hide = true)]
     ExportIcon {
@@ -113,6 +118,18 @@ enum Cmd {
         #[arg(long, default_value_t = 1024)]
         size: u32,
     },
+}
+
+#[derive(Subcommand)]
+enum ProfileCmd {
+    /// List saved profiles.
+    List,
+    /// Save the current setup as a profile.
+    Save { name: String },
+    /// Apply a saved profile.
+    Apply { name: String },
+    /// Delete a profile.
+    Delete { name: String },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -238,6 +255,65 @@ fn run(cli: Cli) -> Result<()> {
             } else {
                 let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 print!("{}", report.to_text(&format!("Audio session report: {name}")));
+            }
+            Ok(())
+        }
+        Cmd::Profile { action } => {
+            let path = settings_path.context("no settings location available")?;
+            let mut settings = Settings::load(&path);
+            let find = |s: &Settings, name: &str| {
+                s.profiles.iter().find(|p| p.name.eq_ignore_ascii_case(name)).cloned().with_context(|| {
+                    format!(
+                        "no profile named \"{name}\" (have: {})",
+                        s.profiles.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+                    )
+                })
+            };
+            match action {
+                ProfileCmd::List => {
+                    if settings.profiles.is_empty() {
+                        println!("No profiles. Create one with: audio-interface profile save <name>");
+                    }
+                    for p in &settings.profiles {
+                        println!(
+                            "{:<16} in: {:<30} out: {}",
+                            p.name,
+                            p.default_input.as_ref().map(|r| r.name.as_str()).unwrap_or("-"),
+                            p.default_output.as_ref().map(|r| r.name.as_str()).unwrap_or("-")
+                        );
+                    }
+                }
+                ProfileCmd::Save { name } => {
+                    let devices = make_backend(mock)?.devices()?;
+                    settings.save_profile(audio_interface::profiles::capture(&name, &devices, &settings));
+                    settings.save(&path)?;
+                    println!("Saved profile \"{name}\"");
+                }
+                ProfileCmd::Delete { name } => {
+                    find(&settings, &name)?;
+                    settings.delete_profile(&name);
+                    settings.save(&path)?;
+                    println!("Deleted profile \"{name}\"");
+                }
+                ProfileCmd::Apply { name } => {
+                    use audio_interface::profiles::{Action, plan};
+                    let p = find(&settings, &name)?;
+                    let mut b = make_backend(mock)?;
+                    let (actions, missing) = plan(&p, &b.devices()?);
+                    for a in &actions {
+                        match a {
+                            Action::SetDefault(k) => b.set_default(&k.id, k.direction)?,
+                            Action::SetVolume(k, v) => b.set_volume(&k.id, k.direction, *v)?,
+                            Action::SetMute(k, m) => b.set_mute(&k.id, k.direction, *m)?,
+                        }
+                    }
+                    settings.gain_locks = p.gain_locks.clone();
+                    settings.save(&path)?;
+                    println!("Applied \"{}\": {} change(s)", p.name, actions.len());
+                    if !missing.is_empty() {
+                        println!("Not connected: {}", missing.join(", "));
+                    }
+                }
             }
             Ok(())
         }

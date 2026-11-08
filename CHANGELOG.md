@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Profiles**: save default devices, volumes, mutes and gain locks as named setups ("Calls",
+  "Music") and switch in one click (top-bar menu) or with `audio-interface profile apply <name>`.
 - **Session recording**: ⏺ Record on any device logs level (peak and exact RMS), OS gain, mute,
   signal status, Bluetooth hands-free mode, apps using the device, and events once per second to
   CSV, with optional 16 kHz mono WAV audio. Files go to `Documents/Audio Interface Recordings`.

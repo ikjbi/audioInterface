@@ -85,6 +85,37 @@ Goal: find out if levels or gain drop halfway through a Teams call, and why.
 - [x] Auto-record: start recording when another app starts using a chosen device (a call starts), stop when the call ends
 - [~] CI: Linux test records a test tone, analyzes it, and detects a `parecord` client as "in use" (in-use + auto-record passed; level assertion re-running after the RMS fix)
 
+## Phase 11: Professional feature set
+Benchmarked against SoundSource (macOS), EarTrumpet / SoundSwitch / Voicemeeter (Windows) and
+pavucontrol (Linux). Ordered by value. Platform limits are noted where an OS has no API.
+
+**Everyday control**
+- [x] 11.1 Profiles / presets: save defaults + volumes + gain locks as named profiles ("Calls", "Music") and switch in one click
+- [ ] 11.2 Global hotkeys: toggle mic mute anywhere (push-to-mute), cycle output device
+- [ ] 11.3 System tray / menu-bar icon: quick device switch, mic mute, recording status
+- [ ] 11.4 Desktop notifications: device lost, gain changed by an app, signal lost, call recording saved
+- [ ] 11.5 Start at login (per user: Windows HKCU Run, macOS LaunchAgent, Linux autostart)
+- [ ] 11.6 Separate "communications" default (Windows has a separate default for calls)
+- [ ] 11.7 Custom device names and hiding devices
+- [ ] 11.8 Per-app volume and mute mixer (Windows sessions, PulseAudio streams; macOS has no public API, so it's shown read-only)
+
+**Diagnostics & testing**
+- [ ] 11.9 Mic test: record 5 s and play it back on the default output
+- [ ] 11.10 Speaker test: left/right test tones to identify channels
+- [ ] 11.11 Live mic monitoring ("hear yourself") with a volume control
+- [ ] 11.12 Spectrum analyzer view for inputs
+- [ ] 11.13 Noise floor, SNR estimate, clip counter per metered input
+- [ ] 11.14 Device format info: sample rate, channels (and set the sample rate on macOS)
+- [ ] 11.15 Channel balance (L/R) for outputs
+- [ ] 11.16 Bluetooth profile switch on Linux (A2DP ↔ HFP)
+- [ ] 11.17 Loudness meter (EBU R128 momentary/short-term LUFS)
+
+**App quality**
+- [ ] 11.18 Single instance (a second launch focuses the first)
+- [ ] 11.19 Light/dark/system theme
+- [ ] 11.20 Diagnostics bundle: copy system/device info + recent log for bug reports
+- [ ] 11.21 Settings import/export
+
 ---
 
 ## Progress log

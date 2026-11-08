@@ -46,6 +46,8 @@ pub struct Settings {
     pub record_audio: bool,
     /// Where recordings are saved (`None` = Documents/Audio Interface Recordings).
     pub recordings_dir: Option<std::path::PathBuf>,
+    /// Saved profiles (presets).
+    pub profiles: Vec<crate::profiles::Profile>,
 }
 
 impl Default for Settings {
@@ -63,6 +65,7 @@ impl Default for Settings {
             auto_record_apps: Vec::new(),
             record_audio: false,
             recordings_dir: None,
+            profiles: Vec::new(),
         }
     }
 }

@@ -16,6 +16,7 @@ pub mod icon;
 pub mod levels;
 pub mod meter;
 pub mod model;
+pub mod profiles;
 pub mod recorder;
 pub mod rules;
 pub mod service;

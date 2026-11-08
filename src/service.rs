@@ -36,6 +36,8 @@ pub enum Request {
     /// Start/stop metering a device on user request.
     SetMonitored(DeviceKey, bool),
     UpdateSettings(Settings),
+    /// Apply a profile: switch defaults, volumes and mutes.
+    ApplyProfile(crate::profiles::Profile),
     /// Start logging a device (optionally with audio).
     StartRecording {
         key: DeviceKey,
@@ -292,6 +294,10 @@ impl Worker {
                 }
                 return;
             }
+            Request::ApplyProfile(profile) => {
+                self.apply_profile(&profile);
+                return;
+            }
             Request::StartRecording { key, audio } => {
                 self.start_recording(key, audio, false);
                 return;
@@ -509,6 +515,42 @@ impl Worker {
         }
         self.native_cells = native;
         self.meters.sync(&wanted);
+    }
+
+    fn apply_profile(&mut self, profile: &crate::profiles::Profile) {
+        use crate::profiles::Action;
+        if !self.ensure_backend() {
+            self.log(EventKind::Error, "Cannot apply profile: audio system unavailable");
+            return;
+        }
+        let devices = match self.backend.as_mut().unwrap().devices() {
+            Ok(d) => d,
+            Err(e) => {
+                self.log(EventKind::Error, format!("Cannot apply profile: {e:#}"));
+                return;
+            }
+        };
+        let (actions, missing) = crate::profiles::plan(profile, &devices);
+        let backend = self.backend.as_mut().unwrap();
+        let mut errors = Vec::new();
+        for a in &actions {
+            let r = match a {
+                Action::SetDefault(k) => backend.set_default(&k.id, k.direction),
+                Action::SetVolume(k, v) => backend.set_volume(&k.id, k.direction, *v),
+                Action::SetMute(k, m) => backend.set_mute(&k.id, k.direction, *m),
+            };
+            if let Err(e) = r {
+                errors.push(format!("{e:#}"));
+            }
+        }
+        let mut msg = format!("Profile \"{}\" applied ({} change(s))", profile.name, actions.len() - errors.len());
+        if !missing.is_empty() {
+            msg += &format!("; not connected: {}", missing.join(", "));
+        }
+        self.log(if errors.is_empty() { EventKind::Action } else { EventKind::Warning }, msg);
+        for e in errors {
+            self.log(EventKind::Error, format!("Profile: {e}"));
+        }
     }
 
     fn start_recording(&mut self, key: DeviceKey, audio: bool, auto: bool) {
