@@ -51,8 +51,8 @@ pub struct SessionRecorder {
     rows: Vec<Sample>,
     seconds_written: u64,
     acc_peak: f32,
-    acc_pow: f64,
-    acc_n: u32,
+    acc_energy: f64,
+    acc_samples: u64,
     meter: MeterState,
     last_tick: Instant,
     device: Option<Device>,
@@ -92,8 +92,8 @@ impl SessionRecorder {
             rows: Vec::new(),
             seconds_written: 0,
             acc_peak: 0.0,
-            acc_pow: 0.0,
-            acc_n: 0,
+            acc_energy: 0.0,
+            acc_samples: 0,
             meter: MeterState::new(now),
             last_tick: now,
             device: Some(device.clone()),
@@ -156,8 +156,8 @@ impl SessionRecorder {
         if reading.peak > 0.0 || reading.rms > 0.0 {
             self.acc_peak = self.acc_peak.max(reading.peak);
         }
-        self.acc_pow += (reading.rms as f64).powi(2);
-        self.acc_n += 1;
+        self.acc_energy += reading.energy;
+        self.acc_samples += reading.samples;
         while now.duration_since(self.started).as_secs() > self.seconds_written {
             self.write_row()?;
         }
@@ -165,7 +165,19 @@ impl SessionRecorder {
     }
 
     fn write_row(&mut self) -> Result<()> {
-        let rms = if self.acc_n > 0 { (self.acc_pow / self.acc_n as f64).sqrt() as f32 } else { 0.0 };
+        // Exact RMS over the samples that arrived during this second. Audio
+        // arrives in blocks (up to ~200 ms on PulseAudio), so a second can
+        // be empty. Then repeat the previous value instead of logging silence.
+        let rms = if self.acc_samples > 0 {
+            (self.acc_energy / self.acc_samples as f64).sqrt() as f32
+        } else {
+            self.rows.last().map(|r| crate::levels::from_db(r.rms_db)).unwrap_or(0.0)
+        };
+        if self.acc_samples == 0
+            && let Some(last) = self.rows.last()
+        {
+            self.acc_peak = self.acc_peak.max(crate::levels::from_db(last.peak_db));
+        }
         let d = self.device.as_ref();
         let status = if d.is_none() {
             "lost"
@@ -197,8 +209,8 @@ impl SessionRecorder {
         self.rows.push(row);
         self.seconds_written += 1;
         self.acc_peak = 0.0;
-        self.acc_pow = 0.0;
-        self.acc_n = 0;
+        self.acc_energy = 0.0;
+        self.acc_samples = 0;
         Ok(())
     }
 
@@ -319,7 +331,15 @@ mod tests {
                 rec.update_device(Some(&dev));
                 rec.event("Gain changed by test");
             }
-            let r = LevelReading { peak: 0.1, rms: 0.05, blocks, non_silent_blocks: blocks };
+            // 100 samples per tick at RMS 0.05.
+            let r = LevelReading {
+                peak: 0.1,
+                rms: 0.05,
+                blocks,
+                non_silent_blocks: blocks,
+                energy: 100.0 * 0.0025,
+                samples: 100,
+            };
             rec.tick(r, t0 + Duration::from_millis(i * 100)).unwrap();
         }
         assert_eq!(rec.rows().len(), 3);

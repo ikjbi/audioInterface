@@ -241,7 +241,13 @@ fn run(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::ExportIcon { path, size } => audio_interface::icon::write_png(&path, size),
+        Cmd::ExportIcon { path, size } => {
+            if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("ico")) {
+                audio_interface::icon::write_ico(&path)
+            } else {
+                audio_interface::icon::write_png(&path, size)
+            }
+        }
     }
 }
 

@@ -20,3 +20,4 @@ pub mod recorder;
 pub mod rules;
 pub mod service;
 pub mod settings;
+pub mod splash;

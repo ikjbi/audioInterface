@@ -117,6 +117,8 @@ WAV=$(ls rec/*.wav)
 python3 - "$CSV" "$WAV" <<'EOF2'
 import csv, sys, wave
 rows = list(csv.DictReader(open(sys.argv[1])))
+for r in rows:
+    print(r["t"], r["rms_db"], r["peak_db"], r["gain_pct"], r["status"])
 assert len(rows) >= 6, len(rows)
 early = [float(r["rms_db"]) for r in rows[1:3]]
 print("early rms:", early, "gains:", [r["gain_pct"] for r in rows])

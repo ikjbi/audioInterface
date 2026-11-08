@@ -20,7 +20,7 @@ use std::time::{Duration, Instant, SystemTime};
 /// and exit. Used for docs and for visual checks in CI.
 pub const SCREENSHOT_ENV: &str = "AUDIO_INTERFACE_SCREENSHOT";
 /// Frames to render before capturing, so meters and layout settle.
-const SCREENSHOT_AFTER_FRAMES: u64 = 120;
+const SCREENSHOT_AFTER_FRAMES: u64 = 60;
 
 pub fn run(service: Service, settings: Settings, settings_path: Option<PathBuf>) -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -69,6 +69,7 @@ struct App {
     frame_count: u64,
     screenshot: Option<(PathBuf, Arc<AtomicBool>)>,
     recordings_panel: RecordingsPanel,
+    splash: crate::splash::Splash,
 }
 
 const GREEN: Color32 = Color32::from_rgb(0x3f, 0xb9, 0x50);
@@ -92,6 +93,7 @@ impl App {
             show_log: true,
             view: View::default(),
             frame_count: 0,
+            splash: crate::splash::Splash::new(),
             recordings_panel: RecordingsPanel {
                 open: std::env::var("AUDIO_INTERFACE_OPEN").is_ok_and(|v| v == "recordings"),
                 ..RecordingsPanel::default()
@@ -648,6 +650,17 @@ impl eframe::App for App {
             if changed {
                 self.settings_changed();
             }
+        }
+        if !self.splash.is_done() {
+            let ready = !self.view.api.is_empty() || self.view.error.is_some();
+            let status = if let Some(e) = &self.view.error {
+                format!("Audio system unavailable: {e}")
+            } else if self.view.api.is_empty() {
+                "Connecting to the audio system".to_string()
+            } else {
+                format!("{} · found {} devices", self.view.api, self.view.devices.len())
+            };
+            self.splash.show(&ctx, &status, ready);
         }
         self.save_settings_if_needed();
         self.frame_count += 1;

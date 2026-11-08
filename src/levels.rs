@@ -49,6 +49,10 @@ pub struct LevelCell {
     /// copy without stealing peaks from each other.
     peak_bits: [AtomicU32; CONSUMERS],
     rms_bits: [AtomicU32; CONSUMERS],
+    /// Sum of squared samples (f64 bits) and sample count since the last
+    /// take, for an exact RMS over the period regardless of block timing.
+    energy_bits: [AtomicU64; CONSUMERS],
+    samples: [AtomicU64; CONSUMERS],
     /// Number of audio blocks received in total (detects stalled streams).
     blocks: AtomicU64,
     /// Number of blocks that contained at least one non-zero sample.
@@ -69,6 +73,8 @@ impl Default for LevelCell {
         LevelCell {
             peak_bits: std::array::from_fn(|_| AtomicU32::new(0)),
             rms_bits: std::array::from_fn(|_| AtomicU32::new(0)),
+            energy_bits: std::array::from_fn(|_| AtomicU64::new(0)),
+            samples: std::array::from_fn(|_| AtomicU64::new(0)),
             blocks: AtomicU64::new(0),
             non_silent_blocks: AtomicU64::new(0),
         }
@@ -82,17 +88,53 @@ pub struct LevelReading {
     pub rms: f32,
     pub blocks: u64,
     pub non_silent_blocks: u64,
+    /// Sum of squared samples since the previous take (this consumer).
+    pub energy: f64,
+    /// Number of samples since the previous take (this consumer).
+    pub samples: u64,
+}
+
+impl LevelReading {
+    /// Exact RMS over all samples since the previous take, if any arrived.
+    pub fn mean_rms(&self) -> Option<f32> {
+        (self.samples > 0).then(|| (self.energy / self.samples as f64).sqrt() as f32)
+    }
 }
 
 impl LevelCell {
     /// Called from the audio thread. Must not block or allocate.
     pub fn push(&self, samples: &[f32]) {
         let p = peak(samples);
-        let r = rms(samples);
-        self.push_levels(p, r);
+        let energy: f64 = samples.iter().filter(|s| s.is_finite()).map(|&s| (s as f64) * (s as f64)).sum();
+        let r = if samples.is_empty() { 0.0 } else { (energy / samples.len() as f64).sqrt() as f32 };
+        self.add_energy(energy, samples.len() as u64);
+        self.push_peak_rms(p, r);
     }
 
+    /// For sources that only report levels (native OS peak meters): counts as
+    /// one sample with power `rms²`.
     pub fn push_levels(&self, peak: f32, rms: f32) {
+        self.add_energy((rms as f64) * (rms as f64), 1);
+        self.push_peak_rms(peak, rms);
+    }
+
+    fn add_energy(&self, energy: f64, n: u64) {
+        for i in 0..CONSUMERS {
+            // Lock-free f64 add (compare-exchange loop; uncontended in practice).
+            let cell = &self.energy_bits[i];
+            let mut cur = cell.load(Ordering::Relaxed);
+            loop {
+                let new = (f64::from_bits(cur) + energy).to_bits();
+                match cell.compare_exchange_weak(cur, new, Ordering::Relaxed, Ordering::Relaxed) {
+                    Ok(_) => break,
+                    Err(actual) => cur = actual,
+                }
+            }
+            self.samples[i].fetch_add(n, Ordering::Relaxed);
+        }
+    }
+
+    fn push_peak_rms(&self, peak: f32, rms: f32) {
         let (p, r) = (peak.max(0.0).to_bits(), rms.max(0.0).to_bits());
         for i in 0..CONSUMERS {
             self.peak_bits[i].fetch_max(p, Ordering::Relaxed);
@@ -117,6 +159,8 @@ impl LevelCell {
             rms: f32::from_bits(self.rms_bits[i].swap(0, Ordering::Relaxed)),
             blocks: self.blocks.load(Ordering::Relaxed),
             non_silent_blocks: self.non_silent_blocks.load(Ordering::Relaxed),
+            energy: f64::from_bits(self.energy_bits[i].swap(0, Ordering::Relaxed)),
+            samples: self.samples[i].swap(0, Ordering::Relaxed),
         }
     }
 }
@@ -360,6 +404,18 @@ mod tests {
     }
 
     #[test]
+    fn mean_rms_is_exact_over_uneven_blocks() {
+        let cell = LevelCell::default();
+        // One loud block of 3 samples and one quiet block of 1 sample.
+        cell.push(&[1.0, -1.0, 1.0]);
+        cell.push(&[0.0]);
+        let r = cell.take_for(Consumer::Recorder);
+        assert_eq!(r.samples, 4);
+        assert!((r.mean_rms().unwrap() - (3.0f32 / 4.0).sqrt()).abs() < 1e-6);
+        assert_eq!(cell.take_for(Consumer::Recorder).mean_rms(), None, "nothing new");
+    }
+
+    #[test]
     fn level_cell_keeps_max_between_reads() {
         let cell = LevelCell::default();
         cell.push(&[0.2, -0.1]);
@@ -379,7 +435,7 @@ mod tests {
     }
 
     fn reading(peak: f32, blocks: u64, non_silent: u64) -> LevelReading {
-        LevelReading { peak, rms: peak / 2.0, blocks, non_silent_blocks: non_silent }
+        LevelReading { peak, rms: peak / 2.0, blocks, non_silent_blocks: non_silent, ..Default::default() }
     }
 
     #[test]
