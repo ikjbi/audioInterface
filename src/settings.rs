@@ -54,6 +54,12 @@ pub struct Settings {
     pub hidden: Vec<HiddenDevice>,
     /// Show desktop notifications for important events.
     pub notifications: bool,
+    /// Global hotkeys (empty = disabled). Syntax: `Ctrl+Alt+M`; `CmdOrCtrl` = ⌘ on macOS.
+    pub hotkey_mute_mic: String,
+    pub hotkey_next_output: String,
+    pub hotkey_next_input: String,
+    /// Closing the window keeps the app running in the tray / menu bar.
+    pub close_to_tray: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -92,6 +98,10 @@ impl Default for Settings {
             aliases: Vec::new(),
             hidden: Vec::new(),
             notifications: true,
+            hotkey_mute_mic: "Ctrl+Alt+M".into(),
+            hotkey_next_output: "Ctrl+Alt+O".into(),
+            hotkey_next_input: "Ctrl+Alt+I".into(),
+            close_to_tray: true,
         }
     }
 }
@@ -155,6 +165,35 @@ impl Settings {
         if hide {
             self.hidden.push(HiddenDevice { device: DeviceRef::of(d), direction: d.direction });
         }
+    }
+
+    /// Devices of one direction in "cycle" order: preferred ones first (in
+    /// priority order), then the rest by name, skipping hidden devices.
+    pub fn cycle_order<'a>(
+        &self,
+        devices: &'a [crate::model::Device],
+        dir: Direction,
+    ) -> Vec<&'a crate::model::Device> {
+        let rank = |d: &crate::model::Device| {
+            self.preferred(dir).iter().position(|r| r.id == d.id || r.name == d.name).unwrap_or(usize::MAX)
+        };
+        let mut v: Vec<_> = devices.iter().filter(|d| d.direction == dir && !self.is_hidden(d)).collect();
+        v.sort_by_key(|d| (rank(d), d.name.to_lowercase()));
+        v
+    }
+
+    /// The device after the current default in [`Settings::cycle_order`].
+    pub fn next_device<'a>(
+        &self,
+        devices: &'a [crate::model::Device],
+        dir: Direction,
+    ) -> Option<&'a crate::model::Device> {
+        let order = self.cycle_order(devices, dir);
+        if order.len() < 2 {
+            return None;
+        }
+        let cur = order.iter().position(|d| d.is_default).unwrap_or(order.len() - 1);
+        Some(order[(cur + 1) % order.len()])
     }
 
     pub fn recordings_dir(&self) -> std::path::PathBuf {
@@ -271,6 +310,25 @@ mod tests {
         s.toggle_preferred(r("other-id", "C"), Direction::Output); // removes by name
         let ids: Vec<_> = s.preferred_outputs.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, ["a", "b"]);
+    }
+
+    #[test]
+    fn cycling_respects_preferences_and_hidden() {
+        use crate::model::test_device;
+        let mut a = test_device("a", "Alpha", Direction::Output);
+        let b = test_device("b", "Bravo", Direction::Output);
+        let c = test_device("c", "Charlie", Direction::Output);
+        a.is_default = true;
+        let devices = vec![a, b, c];
+        let mut s = Settings::default();
+        assert_eq!(s.next_device(&devices, Direction::Output).unwrap().id, "b");
+        s.preferred_outputs = vec![DeviceRef { id: "c".into(), name: "Charlie".into() }];
+        // Order is now Charlie, Alpha, Bravo; after Alpha comes Bravo, after Bravo wraps to Charlie.
+        let ids: Vec<_> = s.cycle_order(&devices, Direction::Output).iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, ["c", "a", "b"]);
+        s.set_hidden(&devices[1], true);
+        assert_eq!(s.next_device(&devices, Direction::Output).unwrap().id, "c", "hidden Bravo is skipped");
+        assert!(s.next_device(&devices[..1], Direction::Output).is_none());
     }
 
     #[test]

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Global hotkeys** (configurable, Settings → Global hotkeys): Ctrl+Alt+M mutes/unmutes the mic,
+  Ctrl+Alt+O / Ctrl+Alt+I switch to the next output/input (preferred order, hidden skipped), with
+  a notification. Linux: X11 sessions.
+- **Tray / menu-bar icon** (Windows, macOS): switch input/output, mute the mic, apply profiles, start
+  or stop recording the default input, show the window or quit. Closing the window keeps the app in
+  the tray (optional).
 - **Desktop notifications** (Settings → General) and **"mic gain lowered by another app"**
   detection: a 10+ point drop on an input that you didn't make is logged (also into recordings),
   with the app using the mic, and notified. Also notifies on gain-lock restores, default-device

@@ -11,6 +11,7 @@ pub mod analysis;
 pub mod autostart;
 pub mod backend;
 pub mod bluetooth;
+pub mod desktop;
 pub mod gui;
 pub mod gui_recordings;
 pub mod icon;

@@ -91,8 +91,8 @@ pavucontrol (Linux). Ordered by value. Platform limits are noted where an OS has
 
 **Everyday control**
 - [x] 11.1 Profiles / presets: save defaults + volumes + gain locks as named profiles ("Calls", "Music") and switch in one click
-- [ ] 11.2 Global hotkeys: toggle mic mute anywhere (push-to-mute), cycle output device
-- [ ] 11.3 System tray / menu-bar icon: quick device switch, mic mute, recording status
+- [x] 11.2 Global hotkeys: toggle mic mute anywhere (push-to-mute), cycle output device
+- [x] 11.3 System tray / menu-bar icon: quick device switch, mic mute, recording status (Windows/macOS; Linux skipped because the tray needs GTK headers, which would break the sudo-free build)
 - [x] 11.4 Desktop notifications: device lost, gain changed by an app, signal lost, call recording saved
 - [x] 11.5 Start at login (per user: Windows HKCU Run, macOS LaunchAgent, Linux autostart)
 - [x] 11.6 Separate "communications" default (Windows has a separate default for calls)

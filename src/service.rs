@@ -33,6 +33,10 @@ pub enum Request {
     SetDefault(DeviceKey),
     /// Windows: make this the default communications device only.
     SetCommsDefault(DeviceKey),
+    /// Toggle mute on the default device of a direction (hotkey / tray).
+    ToggleDefaultMute(Direction),
+    /// Switch the default to the next device (hotkey / tray).
+    CycleDefault(Direction),
     SetVolume(DeviceKey, f32),
     SetMute(DeviceKey, bool),
     /// Start/stop metering a device on user request.
@@ -328,6 +332,22 @@ impl Worker {
                 } else {
                     self.monitored.remove(&key);
                 }
+                return;
+            }
+            Request::ToggleDefaultMute(dir) => {
+                let Some(d) = self.devices.iter().find(|d| d.direction == dir && d.is_default).cloned() else {
+                    return;
+                };
+                let muted = !d.muted.unwrap_or(false);
+                self.handle(Request::SetMute(d.key(), muted));
+                let what = if dir == Direction::Input { "Microphone" } else { "Output" };
+                self.notify(&format!("{what} {}", if muted { "muted" } else { "unmuted" }), &self.settings_name(&d));
+                return;
+            }
+            Request::CycleDefault(dir) => {
+                let Some(next) = self.settings.next_device(&self.devices, dir).cloned() else { return };
+                self.handle(Request::SetDefault(next.key()));
+                self.notify(&format!("Default {dir}"), &self.settings_name(&next));
                 return;
             }
             Request::ApplyProfile(profile) => {
@@ -654,6 +674,10 @@ impl Worker {
         for e in errors {
             self.log(EventKind::Error, format!("Profile: {e}"));
         }
+    }
+
+    fn settings_name(&self, d: &Device) -> String {
+        self.settings.display_name(d).to_string()
     }
 
     fn start_recording(&mut self, key: DeviceKey, audio: bool, auto: bool) {

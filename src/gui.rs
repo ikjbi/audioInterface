@@ -41,8 +41,11 @@ pub fn run(service: Service, settings: Settings, settings_path: Option<PathBuf>,
     eframe::run_native(
         "Audio Interface",
         options,
-        Box::new(move |_cc| {
+        Box::new(move |cc| {
+            let with_tray = std::env::var_os(SCREENSHOT_ENV).is_none();
+            let desktop = crate::desktop::Desktop::new(&cc.egui_ctx, &settings, with_tray);
             let mut app = App::new(service, settings, settings_path);
+            app.desktop = Some(desktop);
             app.start_minimized = opts.minimized;
             if opts.minimized {
                 app.splash = crate::splash::Splash::skipped();
@@ -90,6 +93,11 @@ struct App {
     autostart: Option<bool>,
     /// Device being renamed and the text typed so far.
     renaming: Option<(DeviceKey, String)>,
+    desktop: Option<crate::desktop::Desktop>,
+    /// Window hidden to the tray.
+    hidden: bool,
+    /// Quit was chosen (don't hide to tray on close).
+    quitting: bool,
 }
 
 const GREEN: Color32 = Color32::from_rgb(0x3f, 0xb9, 0x50);
@@ -118,6 +126,9 @@ impl App {
             start_minimized: false,
             autostart: None,
             renaming: None,
+            desktop: None,
+            hidden: false,
+            quitting: false,
             recordings_panel: RecordingsPanel {
                 open: std::env::var("AUDIO_INTERFACE_OPEN").is_ok_and(|v| v == "recordings"),
                 ..RecordingsPanel::default()
@@ -663,12 +674,47 @@ impl App {
                     Err(e) => log::error!("start at login: {e:#}"),
                 }
             }
+            if self.desktop.as_ref().is_some_and(|d| d.has_tray()) {
+                changed |= ui
+                    .checkbox(&mut self.settings.close_to_tray, "Closing the window keeps running in the tray / menu bar")
+                    .changed();
+            }
             changed |= ui
                 .checkbox(&mut self.settings.notifications, "Desktop notifications")
                 .on_hover_text(
                     "Mic gain lowered by another app, gain restored, device disconnected, hands-free mode, recordings",
                 )
                 .changed();
+            ui.separator();
+            ui.heading("Global hotkeys");
+            ui.label(RichText::new("Work in any app. Syntax: Ctrl+Alt+M (Ctrl is ⌃ on macOS; use CmdOrCtrl for ⌘). Leave empty to disable.").small().color(MUTED_TEXT));
+            egui::Grid::new("hotkeys").num_columns(2).show(ui, |ui| {
+                for (label, value) in [
+                    ("Mute / unmute mic", &mut self.settings.hotkey_mute_mic),
+                    ("Next output device", &mut self.settings.hotkey_next_output),
+                    ("Next input device", &mut self.settings.hotkey_next_input),
+                ] {
+                    ui.label(label);
+                    let valid = value.trim().is_empty() || crate::desktop::parse_hotkey(value).is_ok();
+                    let mut edit = egui::TextEdit::singleline(value).desired_width(170.0);
+                    if !valid {
+                        edit = edit.text_color(RED);
+                    }
+                    if ui.add(edit).changed() && (value.trim().is_empty() || crate::desktop::parse_hotkey(value).is_ok()) {
+                        changed = true;
+                    }
+                    ui.end_row();
+                }
+            });
+            if let Some(d) = &self.desktop {
+                for e in &d.hotkey_errors {
+                    ui.label(RichText::new(format!("⚠ {e}")).small().color(YELLOW));
+                }
+            }
+            if cfg!(target_os = "linux") {
+                ui.label(RichText::new("On Linux, global hotkeys work in X11 sessions (not Wayland).").small().color(MUTED_TEXT));
+            }
+
             ui.separator();
             ui.heading("Metering");
             changed |=
@@ -783,9 +829,78 @@ impl App {
     }
 }
 
+impl App {
+    fn handle_desktop_command(&mut self, ctx: &egui::Context, cmd: crate::desktop::Command) {
+        use crate::desktop::Command;
+        match cmd {
+            Command::ToggleMicMute => self.service.send(Request::ToggleDefaultMute(Direction::Input)),
+            Command::NextOutput => self.service.send(Request::CycleDefault(Direction::Output)),
+            Command::NextInput => self.service.send(Request::CycleDefault(Direction::Input)),
+            Command::SetDefault(k) => self.service.send(Request::SetDefault(k)),
+            Command::ShowWindow => {
+                self.hidden = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            Command::Quit => {
+                self.quitting = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Command::ApplyProfile(name) => {
+                if let Some(p) = self.settings.profiles.iter().find(|p| p.name == name).cloned() {
+                    self.settings.gain_locks = p.gain_locks.clone();
+                    self.settings_changed();
+                    self.service.send(Request::ApplyProfile(p));
+                }
+            }
+            Command::ToggleRecordDefaultInput => {
+                if self.view.recordings.is_empty() {
+                    if let Some(d) = self.view.devices.iter().find(|d| d.direction == Direction::Input && d.is_default)
+                    {
+                        self.service.send(Request::StartRecording { key: d.key(), audio: self.settings.record_audio });
+                    }
+                } else {
+                    for r in &self.view.recordings {
+                        self.service.send(Request::StopRecording(r.info.key.clone()));
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    /// Runs every frame, and also while the window is hidden in the tray.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.pull();
+        if let Some(mut desktop) = self.desktop.take() {
+            desktop.update_hotkeys(&self.settings);
+            for cmd in desktop.poll() {
+                self.handle_desktop_command(ctx, cmd);
+            }
+            desktop.update_tray(&crate::desktop::TrayState::build(
+                &self.view.devices,
+                &self.settings,
+                !self.view.recordings.is_empty(),
+            ));
+            self.desktop = Some(desktop);
+        }
+        // Close to tray.
+        let has_tray = self.desktop.as_ref().is_some_and(|d| d.has_tray());
+        if ctx.input(|i| i.viewport().close_requested()) && has_tray && self.settings.close_to_tray && !self.quitting {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.hidden = true;
+        }
+        if self.hidden {
+            // Keep polling hotkeys/tray and refreshing the menu while hidden.
+            ctx.request_repaint_after(Duration::from_millis(500));
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         if self.start_minimized && self.frame_count == 1 {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
