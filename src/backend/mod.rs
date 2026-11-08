@@ -1,0 +1,71 @@
+//! OS integration: listing devices and changing system defaults and volumes.
+//!
+//! `cpal` (used for metering) can't change system settings, so each OS gets
+//! a small native backend that implements [`AudioBackend`].
+
+use crate::model::{Device, Direction};
+use anyhow::Result;
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
+pub mod mock;
+#[cfg(windows)]
+mod windows;
+
+/// Native control over the OS audio device configuration.
+///
+/// Implementations are used from a single worker thread and don't need to be `Send`
+/// (COM objects on Windows, for example, are thread-affine).
+pub trait AudioBackend {
+    /// Short name of the underlying API, e.g. `"CoreAudio"`.
+    fn api_name(&self) -> &'static str;
+
+    /// All active devices, inputs and outputs.
+    fn devices(&mut self) -> Result<Vec<Device>>;
+
+    /// Make `id` the system default device for `direction`.
+    fn set_default(&mut self, id: &str, direction: Direction) -> Result<()>;
+
+    /// Set volume/gain as a scalar in `0.0..=1.0`.
+    fn set_volume(&mut self, id: &str, direction: Direction, volume: f32) -> Result<()>;
+
+    fn set_mute(&mut self, id: &str, direction: Direction, muted: bool) -> Result<()>;
+
+    /// Native peak meter that works without opening a capture stream, if the OS
+    /// has one (Windows `IAudioMeterInformation`). Returns linear peak 0..=1.
+    fn native_peak(&mut self, _id: &str, _direction: Direction) -> Option<f32> {
+        None
+    }
+
+    /// Whether [`AudioBackend::native_peak`] is meaningful for this direction.
+    fn has_native_meter(&self, _direction: Direction) -> bool {
+        false
+    }
+}
+
+/// Create the backend for the current OS.
+pub fn create() -> Result<Box<dyn AudioBackend>> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok(Box::new(macos::CoreAudioBackend::new()))
+    }
+    #[cfg(windows)]
+    {
+        Ok(Box::new(windows::WasapiBackend::new()?))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Ok(Box::new(linux::PulseBackend::connect()?))
+    }
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+    {
+        anyhow::bail!("this operating system is not supported yet")
+    }
+}
+
+/// Clamp and sanitise a volume scalar.
+pub(crate) fn clamp_volume(v: f32) -> f32 {
+    if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }
+}
