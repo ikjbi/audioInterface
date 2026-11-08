@@ -187,10 +187,23 @@ impl MeterEngine {
                 }
                 Err(e) => {
                     log::warn!("cannot meter {}: {e:#}", o.capture_id);
-                    self.failures.insert(o.key, (Instant::now(), format!("{e:#}")));
+                    self.failures.insert(o.key, (Instant::now(), explain_open_error(&format!("{e:#}"))));
                 }
             }
         }
+    }
+}
+
+/// Add a hint to errors with a known cause.
+fn explain_open_error(err: &str) -> String {
+    let denied = err.contains("Access is denied") || err.contains("0x80070005") || err.contains("-2147024891");
+    if denied {
+        format!(
+            "{err}. The OS is blocking microphone access. Check Settings → Privacy & security → Microphone \
+             (\"Let desktop apps access your microphone\")"
+        )
+    } else {
+        err.to_string()
     }
 }
 
@@ -271,4 +284,15 @@ where
         None,
     )?;
     Ok(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn access_denied_gets_privacy_hint() {
+        let e =
+            super::explain_open_error("Failed to initialize audio client: Access is denied. (os error -2147024891)");
+        assert!(e.contains("Microphone"), "{e}");
+        assert_eq!(super::explain_open_error("device not found"), "device not found");
+    }
 }

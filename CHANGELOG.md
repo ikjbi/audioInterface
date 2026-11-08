@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Fixed
+- A meter blocked by OS microphone privacy (`Access is denied` on Windows) now explains why,
+  and the GUI offers an "Open privacy settings" button (macOS and Windows).
 - Gain lock no longer loops forever on devices that only accept volume in steps. When the
   device settles on a nearby value, that value is accepted and a warning is logged once.
 

@@ -118,6 +118,18 @@ jobs:
       - name: Device smoke test
         shell: bash
         run: python3 scripts/device-smoke.py target/debug/audio-interface ${{ runner.os == 'Windows' && '--require-devices' || '' }}
+      - name: Allow microphone access for desktop apps (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Hosted runners ship with "Let desktop apps access your microphone" off,
+          # which makes WASAPI capture fail with E_ACCESSDENIED.
+          foreach ($root in 'HKCU:', 'HKLM:') {
+            $base = "$root\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone"
+            New-Item -Path "$base\NonPackaged" -Force | Out-Null
+            Set-ItemProperty -Path $base -Name Value -Value Allow
+            Set-ItemProperty -Path "$base\NonPackaged" -Name Value -Value Allow
+          }
       - name: Capture/meter smoke test
         shell: bash
         run: |

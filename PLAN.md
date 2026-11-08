@@ -27,7 +27,7 @@ Status key: `[x]` done · `[~]` partially done / see notes · `[ ]` not started
 
 ## Phase 2: Platform backends
 - [x] macOS: CoreAudio (devices, default get/set, volume, mute, transport type)
-- [~] Windows: WASAPI / MMDevice (devices, `IPolicyConfig` default set for all roles, endpoint volume, mute, output peak meter) (written and type-checked; runtime verified by CI only (no Windows machine available))
+- [x] Windows: WASAPI / MMDevice (devices, `IPolicyConfig` default set for all roles, endpoint volume, mute, output peak meter) (verified in CI on a Windows runner with a VB-CABLE virtual sound card)
 - [x] Linux: PulseAudio / PipeWire-Pulse (sinks, sources, default get/set, volume, mute, bus type) (verified in CI on a real PulseAudio server)
 
 ## Phase 3: Live level metering
@@ -59,7 +59,7 @@ Status key: `[x]` done · `[~]` partially done / see notes · `[ ]` not started
 ## Phase 7: CI / cross-platform verification
 - [x] GitHub Actions: build + clippy + tests on ubuntu, windows, macos
 - [x] Linux smoke test against a real PulseAudio server with a null sink (list, set-default, volume)
-- [~] Windows and macOS smoke test of the CLI (headless runners) (mock backend only for now)
+- [x] Windows and macOS smoke test of the CLI (real devices: VB-CABLE on Windows, Background Music on macOS)
 - [x] Release workflow: tagged builds upload binaries for all 3 OSes
 
 ## Phase 8: Polish (stretch)
@@ -90,3 +90,9 @@ Status key: `[x]` done · `[~]` partially done / see notes · `[ ]` not started
 - **23:35** `scripts/device-smoke.py` passes on the real Mac (3 inputs, 2 outputs), and device
   state afterwards is identical to before. Added a real-device CI job for Windows (VB-CABLE)
   and macOS. Added the release workflow, macOS `.app` bundling, app icon and level-history graph.
+- **23:55** Windows backend verified on a real Windows runner: device list, volume
+  (37% read back as 0.370), mute and `IPolicyConfig` default switching all pass, and state is
+  restored. WASAPI capture failed with `E_ACCESSDENIED` because the runner has microphone
+  privacy turned off. The app now explains this error and links to the privacy settings, and
+  CI grants access through the registry before the meter test. Fixed a gain-lock loop on
+  devices with stepped volume.
