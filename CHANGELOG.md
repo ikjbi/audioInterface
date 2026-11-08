@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Desktop notifications** (Settings → General) and **"mic gain lowered by another app"**
+  detection: a 10+ point drop on an input that you didn't make is logged (also into recordings),
+  with the app using the mic, and notified. Also notifies on gain-lock restores, default-device
+  disconnects, hands-free switches, and call recordings starting or being saved.
 - **Windows communications device**: "CALLS" badge, "Use for calls only" in the device menu and
   `set-default --comms`, to send Teams/Zoom to a headset while media stays on speakers.
 - **Rename and hide devices**: right-click (or double-click) a device name; hidden devices can be

@@ -181,6 +181,11 @@ struct Worker {
     /// Auto-started recordings, and since when their device has been idle.
     auto_recording: HashMap<DeviceKey, Option<Instant>>,
     events_forwarded: u64,
+    /// When we (user request, gain lock, profile) last changed a volume, so
+    /// changes made by other apps can be told apart.
+    our_volume_change: HashMap<DeviceKey, Instant>,
+    /// Rate limiting for desktop notifications, by title.
+    notified: Mutex<HashMap<String, Instant>>,
     shared: Arc<Mutex<Snapshot>>,
     rx: Receiver<Request>,
 }
@@ -205,6 +210,8 @@ impl Worker {
             want_audio: BTreeSet::new(),
             auto_recording: HashMap::new(),
             events_forwarded: 0,
+            our_volume_change: HashMap::new(),
+            notified: Mutex::new(HashMap::new()),
             shared,
             rx,
         }
@@ -286,6 +293,29 @@ impl Worker {
         }
     }
 
+    /// Show a desktop notification (off in tests and when disabled in settings).
+    fn notify(&self, title: &str, body: &str) {
+        if !self.settings.notifications || cfg!(test) {
+            return;
+        }
+        {
+            let mut seen = self.notified.lock().unwrap_or_else(|e| e.into_inner());
+            if seen.get(title).is_some_and(|t| t.elapsed() < Duration::from_secs(15)) {
+                return;
+            }
+            seen.insert(title.to_string(), Instant::now());
+        }
+        let (title, body) = (title.to_string(), body.to_string());
+        // Showing can block briefly (D-Bus / Notification Center), so never on this thread.
+        let _ = std::thread::Builder::new().name("notify".into()).spawn(move || {
+            if let Err(e) =
+                notify_rust::Notification::new().appname("Audio Interface").summary(&title).body(&body).show()
+            {
+                log::warn!("notification failed: {e}");
+            }
+        });
+    }
+
     fn handle(&mut self, req: Request) {
         match req {
             Request::UpdateSettings(s) => {
@@ -319,6 +349,9 @@ impl Worker {
         if !self.ensure_backend() {
             self.log(EventKind::Error, "Cannot apply change: audio system unavailable");
             return;
+        }
+        if let Request::SetVolume(k, _) = &req {
+            self.our_volume_change.insert(k.clone(), Instant::now());
         }
         let name = match &req {
             Request::SetDefault(k)
@@ -415,11 +448,22 @@ impl Worker {
         let backend = self.backend.as_mut().unwrap();
         let mut changed = false;
         let mut msgs = Vec::new();
+        let mut notes: Vec<(String, String)> = Vec::new();
 
         let mut applied = Vec::new();
         for c in self.locker.corrections(&devices, &self.settings) {
+            self.our_volume_change.insert(c.key.clone(), Instant::now());
             match backend.set_volume(&c.key.id, c.key.direction, c.to) {
                 Ok(()) => {
+                    notes.push((
+                        "Mic gain restored".to_string(),
+                        format!(
+                            "{}: something changed it to {:.0}%. Gain lock put it back to {:.0}%.",
+                            c.name,
+                            c.from * 100.0,
+                            c.to * 100.0
+                        ),
+                    ));
                     msgs.push((
                         EventKind::Action,
                         format!("Gain lock: restored {} from {:.0}% to {:.0}%", c.name, c.from * 100.0, c.to * 100.0),
@@ -459,6 +503,9 @@ impl Worker {
         for (kind, m) in msgs {
             self.log(kind, m);
         }
+        for (title, body) in notes {
+            self.notify(&title, &body);
+        }
         devices
     }
 
@@ -479,6 +526,41 @@ impl Worker {
         for o in old {
             if !new.iter().any(|d| d.key() == o.key()) {
                 self.log(EventKind::Warning, format!("Disconnected: {} ({})", o.name, o.direction));
+                if o.is_default {
+                    self.notify(&format!("{} disconnected", o.name), &format!("Your default {} is gone.", o.direction));
+                }
+            }
+        }
+        // Gain lowered by someone else (e.g. an app's automatic mic adjustment).
+        for d in new {
+            let Some(o) = old.iter().find(|o| o.key() == d.key()) else { continue };
+            let (Some(before), Some(now)) = (o.volume, d.volume) else { continue };
+            let ours = self.our_volume_change.get(&d.key()).is_some_and(|t| t.elapsed() < Duration::from_secs(3));
+            let locked = self.settings.gain_lock_for(&d.key(), &d.name).is_some();
+            if d.direction == Direction::Input && !ours && !locked && now < before - 0.10 {
+                let apps = if d.in_use_by.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({} is using it)", d.in_use_by.join(", "))
+                };
+                self.log(
+                    EventKind::Warning,
+                    format!(
+                        "Mic gain of {} lowered from {:.0}% to {:.0}% by another app{apps}",
+                        d.name,
+                        before * 100.0,
+                        now * 100.0
+                    ),
+                );
+                self.notify(
+                    "Mic gain lowered by another app",
+                    &format!(
+                        "{}: {:.0}% → {:.0}%{apps}. Use the gain lock (🔒) to prevent this.",
+                        d.name,
+                        before * 100.0,
+                        now * 100.0
+                    ),
+                );
             }
         }
         for dir in Direction::ALL {
@@ -499,6 +581,10 @@ impl Worker {
                 self.log(
                     EventKind::Warning,
                     format!("{} switched to hands-free mode: audio quality is reduced", d.name),
+                );
+                self.notify(
+                    "Headset switched to hands-free mode",
+                    &format!("{}: playback is now call quality because its mic is in use.", d.name),
                 );
             }
         }
@@ -543,6 +629,11 @@ impl Worker {
             }
         };
         let (actions, missing) = crate::profiles::plan(profile, &devices);
+        for a in &actions {
+            if let Action::SetVolume(k, _) = a {
+                self.our_volume_change.insert(k.clone(), Instant::now());
+            }
+        }
         let backend = self.backend.as_mut().unwrap();
         let mut errors = Vec::new();
         for a in &actions {
@@ -584,6 +675,12 @@ impl Worker {
                 if auto {
                     self.auto_recording.insert(key.clone(), None);
                 }
+                if auto {
+                    self.notify(
+                        "Recording call",
+                        &format!("{} is in use by {}; logging levels.", device.name, device.in_use_by.join(", ")),
+                    );
+                }
                 let why =
                     if auto { format!(" (call detected: {})", device.in_use_by.join(", ")) } else { String::new() };
                 self.log(EventKind::Action, format!("Recording {}{why} → {path}", device.name));
@@ -608,6 +705,7 @@ impl Worker {
                         s.finished.pop_front();
                     }
                 }
+                self.notify(&format!("Recording of {name} saved"), &verdict);
                 self.log(EventKind::Action, format!("Recording of {name} saved. {verdict}"));
             }
             Err(e) => self.log(EventKind::Error, format!("Finishing recording of {name} failed: {e:#}")),
@@ -865,5 +963,27 @@ mod tests {
         mock.lock().unwrap().devices[0].in_use_by.clear();
         wait_for(&service, |s| s.recordings.is_empty() && s.finished.len() == 1);
         assert!(service.snapshot().finished[0].info.auto);
+    }
+
+    #[test]
+    fn detects_gain_lowered_by_another_app() {
+        let mock = Arc::new(Mutex::new(MockBackend::demo()));
+        let service = Service::start(Settings::default(), shared_mock_factory(mock.clone()));
+        wait_for(&service, |s| s.devices.len() == 6);
+        // Our own change: not reported.
+        service.send(Request::SetVolume(DeviceKey { id: "usb-mic".into(), direction: Direction::Input }, 0.2));
+        wait_for(&service, |s| s.devices.iter().any(|d| d.id == "usb-mic" && d.volume == Some(0.2)));
+        // Another app (behind our back) lowers the built-in mic from 75% to 30%.
+        {
+            let mut m = mock.lock().unwrap();
+            m.devices[0].volume = Some(0.3);
+            m.devices[0].in_use_by = vec!["Microsoft Teams".into()];
+        }
+        wait_for(&service, |s| {
+            s.events
+                .iter()
+                .any(|e| e.text.contains("lowered from 75% to 30% by another app (Microsoft Teams is using it)"))
+        });
+        assert!(!service.snapshot().events.iter().any(|e| e.text.contains("USB Microphone lowered")));
     }
 }

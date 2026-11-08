@@ -52,6 +52,8 @@ pub struct Settings {
     pub aliases: Vec<DeviceAlias>,
     /// Devices hidden from the list.
     pub hidden: Vec<HiddenDevice>,
+    /// Show desktop notifications for important events.
+    pub notifications: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -89,6 +91,7 @@ impl Default for Settings {
             profiles: Vec::new(),
             aliases: Vec::new(),
             hidden: Vec::new(),
+            notifications: true,
         }
     }
 }

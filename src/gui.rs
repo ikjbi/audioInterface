@@ -663,6 +663,12 @@ impl App {
                     Err(e) => log::error!("start at login: {e:#}"),
                 }
             }
+            changed |= ui
+                .checkbox(&mut self.settings.notifications, "Desktop notifications")
+                .on_hover_text(
+                    "Mic gain lowered by another app, gain restored, device disconnected, hands-free mode, recordings",
+                )
+                .changed();
             ui.separator();
             ui.heading("Metering");
             changed |=
