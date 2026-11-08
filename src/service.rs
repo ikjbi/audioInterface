@@ -8,10 +8,12 @@
 //! * polls native peak meters (Windows outputs),
 //! * records a human-readable event log.
 
+use crate::analysis::{Report, Sample};
 use crate::backend::AudioBackend;
-use crate::levels::LevelCell;
+use crate::levels::{Consumer, LevelCell};
 use crate::meter::MeterEngine;
 use crate::model::{Device, DeviceKey, Direction, Transport};
+use crate::recorder::{RecordingInfo, SessionRecorder};
 use crate::rules::{AutoSwitcher, GainLocker};
 use crate::settings::Settings;
 use anyhow::Result;
@@ -34,6 +36,12 @@ pub enum Request {
     /// Start/stop metering a device on user request.
     SetMonitored(DeviceKey, bool),
     UpdateSettings(Settings),
+    /// Start logging a device (optionally with audio).
+    StartRecording {
+        key: DeviceKey,
+        audio: bool,
+    },
+    StopRecording(DeviceKey),
     Refresh,
     Shutdown,
 }
@@ -71,6 +79,28 @@ pub struct Snapshot {
     pub native_metered: BTreeSet<DeviceKey>,
     /// Incremented on every device refresh.
     pub generation: u64,
+    /// Total number of events ever logged (to find new ones).
+    pub total_events: u64,
+    /// Recordings in progress.
+    pub recordings: Vec<ActiveRecording>,
+    /// Recently finished recordings with their analysis, newest last.
+    pub finished: VecDeque<FinishedRecording>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ActiveRecording {
+    pub info: RecordingInfo,
+    pub elapsed_s: f64,
+    pub audio: bool,
+    /// The most recent logged seconds (for a live chart).
+    pub recent: Vec<Sample>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FinishedRecording {
+    pub info: RecordingInfo,
+    pub report: Report,
+    pub report_path: std::path::PathBuf,
 }
 
 impl Snapshot {
@@ -82,6 +112,7 @@ impl Snapshot {
             _ => log::info!("{text}"),
         }
         self.events.push_back(Event { at: SystemTime::now(), kind, text });
+        self.total_events += 1;
         while self.events.len() > MAX_EVENTS {
             self.events.pop_front();
         }
@@ -138,6 +169,12 @@ struct Worker {
     monitored: BTreeSet<DeviceKey>,
     devices: Vec<Device>,
     have_listed: bool,
+    recorders: HashMap<DeviceKey, SessionRecorder>,
+    /// Recordings that should include audio (attached once the stream is up).
+    want_audio: BTreeSet<DeviceKey>,
+    /// Auto-started recordings, and since when their device has been idle.
+    auto_recording: HashMap<DeviceKey, Option<Instant>>,
+    events_forwarded: u64,
     shared: Arc<Mutex<Snapshot>>,
     rx: Receiver<Request>,
 }
@@ -158,6 +195,10 @@ impl Worker {
             monitored: BTreeSet::new(),
             devices: Vec::new(),
             have_listed: false,
+            recorders: HashMap::new(),
+            want_audio: BTreeSet::new(),
+            auto_recording: HashMap::new(),
+            events_forwarded: 0,
             shared,
             rx,
         }
@@ -186,6 +227,7 @@ impl Worker {
                     // Drain anything else queued (e.g. a burst of slider moves).
                     while let Ok(req) = self.rx.try_recv() {
                         if matches!(req, Request::Shutdown) {
+                            self.stop_all_recordings();
                             self.meters.stop_all();
                             return;
                         }
@@ -200,7 +242,9 @@ impl Worker {
                 last_refresh = Some(Instant::now());
             }
             self.poll_native_meters();
+            self.tick_recorders();
         }
+        self.stop_all_recordings();
         self.meters.stop_all();
     }
 
@@ -246,6 +290,15 @@ impl Worker {
                 } else {
                     self.monitored.remove(&key);
                 }
+                return;
+            }
+            Request::StartRecording { key, audio } => {
+                self.start_recording(key, audio, false);
+                return;
+            }
+            Request::StopRecording(key) => {
+                self.auto_recording.remove(&key);
+                self.stop_recording(&key);
                 return;
             }
             Request::Refresh | Request::Shutdown => return,
@@ -299,6 +352,10 @@ impl Worker {
         self.log_changes(&devices);
         self.devices = devices;
         self.have_listed = true;
+        self.auto_record();
+        for (key, rec) in self.recorders.iter_mut() {
+            rec.update_device(self.devices.iter().find(|d| d.key() == *key));
+        }
         self.sync_meters();
 
         let levels: HashMap<DeviceKey, Arc<LevelCell>> = self
@@ -314,7 +371,18 @@ impl Worker {
         let native: BTreeSet<DeviceKey> = self.native_cells.keys().cloned().collect();
         let devices = self.devices.clone();
         let monitored = self.monitored.clone();
+        let recordings: Vec<ActiveRecording> = self
+            .recorders
+            .values()
+            .map(|r| ActiveRecording {
+                info: r.info.clone(),
+                elapsed_s: r.elapsed().as_secs_f64(),
+                audio: r.records_audio(),
+                recent: r.rows()[r.rows().len().saturating_sub(600)..].to_vec(),
+            })
+            .collect();
         let mut s = self.shared();
+        s.recordings = recordings;
         s.devices = devices;
         s.levels = levels;
         s.meter_errors = meter_errors;
@@ -433,7 +501,7 @@ impl Worker {
                 && d.is_default
                 && self.settings.monitor_default_input
                 && (d.transport != Transport::Bluetooth || self.settings.monitor_bluetooth_inputs);
-            if (auto || self.monitored.contains(&key))
+            if (auto || self.monitored.contains(&key) || self.recorders.contains_key(&key))
                 && let Some(cap) = backend.capture_id(&d.id, d.direction)
             {
                 wanted.insert(key, cap);
@@ -441,6 +509,147 @@ impl Worker {
         }
         self.native_cells = native;
         self.meters.sync(&wanted);
+    }
+
+    fn start_recording(&mut self, key: DeviceKey, audio: bool, auto: bool) {
+        if self.recorders.contains_key(&key) {
+            return;
+        }
+        let Some(device) = self.devices.iter().find(|d| d.key() == key).cloned() else {
+            self.log(EventKind::Error, "Cannot record: device not found");
+            return;
+        };
+        let dir = self.settings.recordings_dir();
+        match SessionRecorder::start(&dir, &device, None, auto) {
+            Ok(rec) => {
+                let path = rec.info.csv_path.display().to_string();
+                self.recorders.insert(key.clone(), rec);
+                if audio {
+                    self.want_audio.insert(key.clone());
+                }
+                if auto {
+                    self.auto_recording.insert(key.clone(), None);
+                }
+                let why =
+                    if auto { format!(" (call detected: {})", device.in_use_by.join(", ")) } else { String::new() };
+                self.log(EventKind::Action, format!("Recording {}{why} → {path}", device.name));
+                // Make sure a capture stream is running for it.
+                self.sync_meters();
+            }
+            Err(e) => self.log(EventKind::Error, format!("Cannot start recording {}: {e:#}", device.name)),
+        }
+    }
+
+    fn stop_recording(&mut self, key: &DeviceKey) {
+        self.want_audio.remove(key);
+        let Some(rec) = self.recorders.remove(key) else { return };
+        let name = rec.info.device_name.clone();
+        match rec.finish() {
+            Ok((info, report, report_path)) => {
+                let verdict = report.verdict.clone();
+                {
+                    let mut s = self.shared();
+                    s.finished.push_back(FinishedRecording { info, report, report_path: report_path.clone() });
+                    while s.finished.len() > 20 {
+                        s.finished.pop_front();
+                    }
+                }
+                self.log(EventKind::Action, format!("Recording of {name} saved. {verdict}"));
+            }
+            Err(e) => self.log(EventKind::Error, format!("Finishing recording of {name} failed: {e:#}")),
+        }
+    }
+
+    fn stop_all_recordings(&mut self) {
+        let keys: Vec<DeviceKey> = self.recorders.keys().cloned().collect();
+        for k in keys {
+            self.stop_recording(&k);
+        }
+    }
+
+    /// Start/stop automatic call recordings based on which apps use the inputs.
+    fn auto_record(&mut self) {
+        const GRACE: Duration = if cfg!(test) { Duration::from_millis(600) } else { Duration::from_secs(10) };
+        if self.settings.auto_record_calls {
+            let candidates: Vec<DeviceKey> = self
+                .devices
+                .iter()
+                .filter(|d| d.direction == Direction::Input && self.settings.auto_record_matches(&d.in_use_by))
+                .map(|d| d.key())
+                .filter(|k| !self.recorders.contains_key(k))
+                .collect();
+            for key in candidates {
+                let audio = self.settings.record_audio;
+                self.start_recording(key, audio, true);
+            }
+        }
+        // Stop auto recordings once the device has been idle (or gone) for a while.
+        let now = Instant::now();
+        let mut to_stop = Vec::new();
+        for (key, idle_since) in self.auto_recording.iter_mut() {
+            let busy = self.devices.iter().any(|d| d.key() == *key && !d.in_use_by.is_empty());
+            if busy {
+                *idle_since = None;
+            } else {
+                let since = *idle_since.get_or_insert(now);
+                if now.duration_since(since) >= GRACE {
+                    to_stop.push(key.clone());
+                }
+            }
+        }
+        for key in to_stop {
+            self.auto_recording.remove(&key);
+            self.log(EventKind::Info, "Call ended, stopping automatic recording");
+            self.stop_recording(&key);
+        }
+    }
+
+    fn tick_recorders(&mut self) {
+        // Forward new event-log lines into the recordings (read under one lock).
+        let forwarded = self.events_forwarded;
+        let (new_events, total): (Vec<String>, u64) = {
+            let s = self.shared();
+            let n = (s.total_events - forwarded).min(s.events.len() as u64) as usize;
+            (s.events.iter().skip(s.events.len() - n).map(|e| e.text.clone()).collect(), s.total_events)
+        };
+        self.events_forwarded = total;
+        if self.recorders.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let mut failed = Vec::new();
+        for (key, rec) in self.recorders.iter_mut() {
+            for e in &new_events {
+                rec.event(e.clone());
+            }
+            // Attach (or re-attach after a stream restart) the audio tap.
+            if self.want_audio.contains(key)
+                && let Some(tap) = self.meters.tap(key)
+                && rec.audio_tap().is_none_or(|t| !Arc::ptr_eq(t, &tap))
+            {
+                let restarted = rec.audio_tap().is_some();
+                if let Err(e) = rec.attach_audio(tap) {
+                    failed.push((key.clone(), format!("audio: {e:#}")));
+                } else if restarted {
+                    rec.event("Audio stream restarted (new WAV part)");
+                }
+            }
+            let reading = self
+                .meters
+                .cell(key)
+                .or_else(|| self.native_cells.get(key).cloned())
+                .map(|c| c.take_for(Consumer::Recorder))
+                .unwrap_or_default();
+            if let Err(e) = rec.tick(reading, now) {
+                failed.push((key.clone(), format!("{e:#}")));
+            }
+        }
+        for (key, err) in failed {
+            self.log(EventKind::Error, format!("Recording error: {err}"));
+            if !err.starts_with("audio:") {
+                self.stop_recording(&key);
+            }
+        }
     }
 
     fn poll_native_meters(&mut self) {
@@ -471,7 +680,10 @@ mod tests {
     }
 
     fn mock_factory(mock: MockBackend) -> BackendFactory {
-        let shared = Arc::new(Mutex::new(mock));
+        shared_mock_factory(Arc::new(Mutex::new(mock)))
+    }
+
+    fn shared_mock_factory(shared: Arc<Mutex<MockBackend>>) -> BackendFactory {
         Box::new(move || Ok(Box::new(SharedMock(shared.clone())) as Box<dyn AudioBackend>))
     }
 
@@ -539,5 +751,57 @@ mod tests {
         let service = Service::start(Settings::default(), Box::new(|| anyhow::bail!("no sound server")));
         wait_for(&service, |s| s.error.as_deref() == Some("no sound server"));
         assert!(service.snapshot().devices.is_empty());
+    }
+
+    #[test]
+    fn manual_recording_writes_files_and_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Settings { recordings_dir: Some(dir.path().to_path_buf()), ..Settings::default() };
+        let service = Service::start(settings, mock_factory(MockBackend::demo()));
+        wait_for(&service, |s| s.devices.len() == 6);
+        let key = DeviceKey { id: "usb-mic".into(), direction: Direction::Input };
+        service.send(Request::StartRecording { key: key.clone(), audio: false });
+        wait_for(&service, |s| s.recordings.len() == 1);
+        std::thread::sleep(Duration::from_millis(1300));
+        // A gain change during the recording ends up in the log.
+        service.send(Request::SetVolume(key.clone(), 0.2));
+        wait_for(&service, |s| s.recordings.first().is_some_and(|r| r.recent.iter().any(|x| x.gain_pct == Some(20.0))));
+        service.send(Request::StopRecording(key));
+        wait_for(&service, |s| s.finished.len() == 1 && s.recordings.is_empty());
+        let f = service.snapshot().finished[0].clone();
+        assert!(f.info.csv_path.exists());
+        assert!(f.report_path.exists());
+        assert!(f.report.seconds_logged >= 2);
+        let rows = crate::analysis::read_csv(&f.info.csv_path).unwrap();
+        assert!(rows.iter().any(|r| r.gain_pct == Some(75.0)) && rows.iter().any(|r| r.gain_pct == Some(20.0)));
+    }
+
+    #[test]
+    fn auto_records_while_another_app_uses_the_mic() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Settings {
+            recordings_dir: Some(dir.path().to_path_buf()),
+            auto_record_calls: true,
+            auto_record_apps: vec!["teams".into()],
+            ..Settings::default()
+        };
+        let mock = Arc::new(Mutex::new(MockBackend::demo()));
+        let service = Service::start(settings, shared_mock_factory(mock.clone()));
+        wait_for(&service, |s| s.devices.len() == 6);
+
+        // Zoom uses the mic: filtered out, no recording.
+        mock.lock().unwrap().devices[0].in_use_by = vec!["Zoom".into()];
+        std::thread::sleep(Duration::from_millis(1200));
+        assert!(service.snapshot().recordings.is_empty());
+
+        // A Teams call starts.
+        mock.lock().unwrap().devices[0].in_use_by = vec!["Microsoft Teams".into()];
+        wait_for(&service, |s| s.recordings.len() == 1 && s.recordings[0].info.auto);
+        assert!(service.snapshot().events.iter().any(|e| e.text.contains("call detected: Microsoft Teams")));
+
+        // Call ends: recording stops after the grace period.
+        mock.lock().unwrap().devices[0].in_use_by.clear();
+        wait_for(&service, |s| s.recordings.is_empty() && s.finished.len() == 1);
+        assert!(service.snapshot().finished[0].info.auto);
     }
 }

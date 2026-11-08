@@ -36,6 +36,16 @@ pub struct Settings {
     pub meter_floor_db: f32,
     /// Hide virtual/aggregate devices in the list.
     pub hide_virtual: bool,
+    /// Start recording an input automatically when another app starts using
+    /// it (e.g. a Teams call), and stop when the app releases it.
+    pub auto_record_calls: bool,
+    /// Only auto-record for apps whose name contains one of these
+    /// (case-insensitive). Empty = any app.
+    pub auto_record_apps: Vec<String>,
+    /// Include audio (WAV) in recordings by default.
+    pub record_audio: bool,
+    /// Where recordings are saved (`None` = Documents/Audio Interface Recordings).
+    pub recordings_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for Settings {
@@ -49,6 +59,10 @@ impl Default for Settings {
             monitor_bluetooth_inputs: false,
             meter_floor_db: -60.0,
             hide_virtual: false,
+            auto_record_calls: false,
+            auto_record_apps: Vec::new(),
+            record_audio: false,
+            recordings_dir: None,
         }
     }
 }
@@ -83,6 +97,20 @@ impl Settings {
         std::fs::write(&tmp, serde_json::to_string_pretty(self)?)?;
         std::fs::rename(&tmp, path)?;
         Ok(())
+    }
+
+    pub fn recordings_dir(&self) -> std::path::PathBuf {
+        self.recordings_dir.clone().unwrap_or_else(crate::recorder::recordings_dir)
+    }
+
+    /// Should auto-record trigger for a device used by these apps?
+    pub fn auto_record_matches(&self, apps: &[String]) -> bool {
+        if apps.is_empty() {
+            return false;
+        }
+        let filters: Vec<String> =
+            self.auto_record_apps.iter().map(|f| f.trim().to_lowercase()).filter(|f| !f.is_empty()).collect();
+        filters.is_empty() || apps.iter().any(|a| filters.iter().any(|f| a.to_lowercase().contains(f)))
     }
 
     pub fn preferred(&self, direction: Direction) -> &Vec<DeviceRef> {
@@ -185,6 +213,16 @@ mod tests {
         s.toggle_preferred(r("other-id", "C"), Direction::Output); // removes by name
         let ids: Vec<_> = s.preferred_outputs.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, ["a", "b"]);
+    }
+
+    #[test]
+    fn auto_record_app_filter() {
+        let mut s = Settings::default();
+        assert!(!s.auto_record_matches(&[]));
+        assert!(s.auto_record_matches(&["Zoom".into()]), "empty filter = any app");
+        s.auto_record_apps = vec!["teams".into(), " ".into()];
+        assert!(s.auto_record_matches(&["Microsoft Teams".into()]));
+        assert!(!s.auto_record_matches(&["Zoom".into()]));
     }
 
     #[test]
