@@ -3,7 +3,7 @@
 //! `cpal` (used for metering) can't change system settings, so each OS gets
 //! a small native backend that implements [`AudioBackend`].
 
-use crate::model::{Device, Direction};
+use crate::model::{Device, DeviceProfile, Direction};
 use anyhow::Result;
 
 #[cfg(target_os = "linux")]
@@ -46,6 +46,17 @@ pub trait AudioBackend {
     /// Change the device sample rate (macOS).
     fn set_sample_rate(&mut self, _id: &str, _direction: Direction, _rate: u32) -> Result<()> {
         anyhow::bail!("changing the sample rate is not supported on this OS")
+    }
+
+    /// Hardware profiles of the card behind this device (PulseAudio). Empty if
+    /// not applicable.
+    fn card_profiles(&mut self, _id: &str, _direction: Direction) -> Vec<DeviceProfile> {
+        Vec::new()
+    }
+
+    /// Switch the card behind this device to another profile.
+    fn set_card_profile(&mut self, _id: &str, _direction: Direction, _profile: &str) -> Result<()> {
+        anyhow::bail!("card profiles are only available on Linux (PulseAudio/PipeWire)")
     }
 
     /// Set the left/right balance (-1 ..= 1) of a stereo device.

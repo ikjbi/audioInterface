@@ -6,7 +6,7 @@
 
 use super::{AudioBackend, clamp_volume};
 use crate::bluetooth::{self, Hints};
-use crate::model::{Device, Direction};
+use crate::model::{Device, DeviceProfile, Direction};
 use anyhow::{Context, Result, anyhow, bail};
 use pulseaudio::protocol::{self, Command, CommandReply, Prop};
 use std::collections::HashMap;
@@ -113,13 +113,22 @@ pub struct PulseBackend {
     conn: Option<Conn>,
     /// Sink name -> its monitor source name (used to meter outputs).
     monitors: HashMap<String, String>,
+    /// (name, direction) -> card index, and card index -> (card name, profiles).
+    device_cards: HashMap<(String, Direction), u32>,
+    cards: HashMap<u32, (CString, Vec<DeviceProfile>)>,
     /// (name, direction) -> current per-channel volumes, for building volume structs.
     channels: HashMap<(String, Direction), Vec<f32>>,
 }
 
 impl PulseBackend {
     pub fn connect() -> Result<Self> {
-        Ok(PulseBackend { conn: Some(Conn::connect()?), monitors: HashMap::new(), channels: HashMap::new() })
+        Ok(PulseBackend {
+            conn: Some(Conn::connect()?),
+            monitors: HashMap::new(),
+            channels: HashMap::new(),
+            device_cards: HashMap::new(),
+            cards: HashMap::new(),
+        })
     }
 
     /// Run `f` on the connection, reconnecting once if the server went away
@@ -205,6 +214,24 @@ impl AudioBackend for PulseBackend {
 
         self.monitors.clear();
         self.channels.clear();
+        self.device_cards.clear();
+        self.cards = cards
+            .iter()
+            .map(|c| {
+                let active = c.active_profile.as_ref().map(|p| cstr(p));
+                let profiles = c
+                    .profiles
+                    .iter()
+                    .filter(|p| p.available != 0 && cstr(&p.name) != "off")
+                    .map(|p| DeviceProfile {
+                        name: cstr(&p.name),
+                        description: p.description.as_deref().map(cstr).unwrap_or_else(|| cstr(&p.name)),
+                        active: active.as_deref() == Some(cstr(&p.name).as_str()),
+                    })
+                    .collect();
+                (c.index, (c.name.clone(), profiles))
+            })
+            .collect();
         let mut out = Vec::new();
 
         let push = |out: &mut Vec<Device>,
@@ -252,6 +279,9 @@ impl AudioBackend for PulseBackend {
                 self.monitors.insert(name.clone(), cstr(m));
             }
             self.channels.insert((name.clone(), Direction::Output), channel_scalars(&s.cvolume));
+            if let Some(card) = s.card_index {
+                self.device_cards.insert((name.clone(), Direction::Output), card);
+            }
             let is_default = default_sink.as_deref() == Some(name.as_str());
             push(
                 &mut out,
@@ -279,6 +309,9 @@ impl AudioBackend for PulseBackend {
             }
             let name = cstr(&s.name);
             self.channels.insert((name.clone(), Direction::Input), channel_scalars(&s.cvolume));
+            if let Some(card) = s.card_index {
+                self.device_cards.insert((name.clone(), Direction::Input), card);
+            }
             let is_default = default_source.as_deref() == Some(name.as_str());
             push(
                 &mut out,
@@ -331,6 +364,38 @@ impl AudioBackend for PulseBackend {
             Direction::Output => c.ack(Command::SetSinkVolume(params.clone())),
             Direction::Input => c.ack(Command::SetSourceVolume(params.clone())),
         })
+    }
+
+    fn card_profiles(&mut self, id: &str, direction: Direction) -> Vec<DeviceProfile> {
+        if self.device_cards.is_empty() {
+            let _ = self.devices();
+        }
+        self.device_cards
+            .get(&(id.to_string(), direction))
+            .and_then(|c| self.cards.get(c))
+            .map(|(_, p)| p.clone())
+            .filter(|p| p.len() > 1)
+            .unwrap_or_default()
+    }
+
+    fn set_card_profile(&mut self, id: &str, direction: Direction, profile: &str) -> Result<()> {
+        if self.device_cards.is_empty() {
+            self.devices()?;
+        }
+        let card = *self.device_cards.get(&(id.to_string(), direction)).context("this device has no sound card")?;
+        let (card_name, profiles) = self.cards.get(&card).cloned().context("card disappeared")?;
+        if !profiles.iter().any(|p| p.name == profile) {
+            bail!(
+                "unknown profile \"{profile}\" (available: {})",
+                profiles.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+            );
+        }
+        let params = protocol::SetCardProfileParams {
+            card_index: None,
+            card_name: Some(card_name),
+            profile_name: CString::new(profile)?,
+        };
+        self.with_conn(|c| c.ack(Command::SetCardProfile(params.clone())))
     }
 
     fn set_balance(&mut self, id: &str, direction: Direction, balance: f32) -> Result<()> {

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Card profiles on Linux**, e.g. switch a Bluetooth headset between A2DP (high quality) and
+  headset/HFP (mic): device menu → Profile, or `card-profile <dir> <device> [profile]`.
 - **Left/right balance** for stereo outputs with per-channel volume (Windows, macOS, Linux): slider
   on the device card, `balance <device> <-1..1>` in the CLI.
 - **Device format**: sample rate and channel count on every device (GUI, `list`, JSON). On macOS

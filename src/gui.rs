@@ -69,6 +69,7 @@ struct View {
     native_metered: BTreeSet<DeviceKey>,
     windows: HashMap<DeviceKey, Arc<crate::levels::SampleWindow>>,
     sample_rates: HashMap<DeviceKey, Vec<u32>>,
+    card_profiles: HashMap<DeviceKey, Vec<crate::model::DeviceProfile>>,
     recordings: Vec<ActiveRecording>,
     finished: Vec<FinishedRecording>,
 }
@@ -201,6 +202,7 @@ impl App {
             native_metered: snap.native_metered.clone(),
             windows: snap.windows.clone(),
             sample_rates: snap.sample_rates.clone(),
+            card_profiles: snap.card_profiles.clone(),
             recordings: snap.recordings.clone(),
             finished: snap.finished.iter().cloned().collect(),
         };
@@ -459,6 +461,23 @@ impl App {
                                     self.tools.push((key.clone(), "Monitor", h));
                                     ui.close();
                                 }
+                            }
+                            if let Some(profiles) = self.view.card_profiles.get(&key) {
+                                ui.menu_button("🎛 Profile", |ui| {
+                                    if d.transport == Transport::Bluetooth {
+                                        ui.label(
+                                            RichText::new("A2DP: best playback, no mic · Headset (HFP): mic, call quality")
+                                                .small()
+                                                .color(MUTED_TEXT),
+                                        );
+                                    }
+                                    for p in profiles {
+                                        if ui.selectable_label(p.active, &p.description).clicked() {
+                                            self.service.send(Request::SetCardProfile(key.clone(), p.name.clone()));
+                                            ui.close();
+                                        }
+                                    }
+                                });
                             }
                             if let Some(rates) = self.view.sample_rates.get(&key).filter(|r| r.len() > 1) {
                                 ui.menu_button("⏱ Sample rate", |ui| {

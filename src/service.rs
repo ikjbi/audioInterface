@@ -33,6 +33,8 @@ pub enum Request {
     SetDefault(DeviceKey),
     /// Windows: make this the default communications device only.
     SetCommsDefault(DeviceKey),
+    /// Switch the card behind a device to a profile (Linux), e.g. A2DP ↔ headset.
+    SetCardProfile(DeviceKey, String),
     /// Left/right balance (-1 ..= 1).
     SetBalance(DeviceKey, f32),
     /// Change a device's sample rate (macOS).
@@ -85,6 +87,8 @@ pub struct Snapshot {
     pub events: VecDeque<Event>,
     /// Level cells for every metered device.
     pub levels: HashMap<DeviceKey, Arc<LevelCell>>,
+    /// Card profiles per device (Linux; empty elsewhere).
+    pub card_profiles: HashMap<DeviceKey, Vec<crate::model::DeviceProfile>>,
     /// Sample rates each device can be switched to (macOS; empty elsewhere).
     pub sample_rates: HashMap<DeviceKey, Vec<u32>>,
     /// Recent raw samples of capture-metered devices (spectrum view).
@@ -387,6 +391,7 @@ impl Worker {
             Request::SetDefault(k)
             | Request::SetSampleRate(k, _)
             | Request::SetBalance(k, _)
+            | Request::SetCardProfile(k, _)
             | Request::SetCommsDefault(k)
             | Request::SetVolume(k, _)
             | Request::SetMute(k, _) => self.name_of(k),
@@ -396,6 +401,11 @@ impl Worker {
         let result = match &req {
             Request::SetDefault(k) => {
                 backend.set_default(&k.id, k.direction).map(|_| format!("Default {} set to {name}", k.direction))
+            }
+            Request::SetCardProfile(k, p) => {
+                let r = backend.set_card_profile(&k.id, k.direction, p).map(|_| format!("{name}: profile set to {p}"));
+                self.rates_checked = None; // re-read profiles
+                r
             }
             Request::SetBalance(k, b) => backend.set_balance(&k.id, k.direction, *b).map(|_| String::new()),
             Request::SetSampleRate(k, rate) => backend
@@ -459,13 +469,19 @@ impl Worker {
         let rates = if self.rates_checked.is_none_or(|t| t.elapsed() > Duration::from_secs(10)) {
             self.rates_checked = Some(Instant::now());
             let backend = self.backend.as_mut().unwrap();
-            Some(
-                self.devices
-                    .iter()
-                    .map(|d| (d.key(), backend.sample_rates(&d.id, d.direction)))
-                    .filter(|(_, r)| !r.is_empty())
-                    .collect::<HashMap<_, _>>(),
-            )
+            let rates = self
+                .devices
+                .iter()
+                .map(|d| (d.key(), backend.sample_rates(&d.id, d.direction)))
+                .filter(|(_, r)| !r.is_empty())
+                .collect::<HashMap<_, _>>();
+            let profiles = self
+                .devices
+                .iter()
+                .map(|d| (d.key(), backend.card_profiles(&d.id, d.direction)))
+                .filter(|(_, p)| !p.is_empty())
+                .collect::<HashMap<_, _>>();
+            Some((rates, profiles))
         } else {
             None
         };
@@ -489,8 +505,9 @@ impl Worker {
         s.devices = devices;
         s.levels = levels;
         s.windows = windows;
-        if let Some(r) = rates {
+        if let Some((r, p)) = rates {
             s.sample_rates = r;
+            s.card_profiles = p;
         }
         s.meter_errors = meter_errors;
         s.monitored = monitored;

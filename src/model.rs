@@ -111,6 +111,15 @@ pub struct Device {
     pub balance: Option<f32>,
 }
 
+/// A hardware profile of the card behind a device (Linux/PulseAudio), e.g.
+/// Bluetooth "A2DP" (high quality, no mic) vs "Headset" (HFP, mic + call quality).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DeviceProfile {
+    pub name: String,
+    pub description: String,
+    pub active: bool,
+}
+
 /// Balance from left/right channel volumes: -1 = only left, 0 = centred, 1 = only right.
 pub fn balance_from(left: f32, right: f32) -> f32 {
     let m = left.max(right);

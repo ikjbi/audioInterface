@@ -121,6 +121,14 @@ enum Cmd {
         /// New rate in Hz, e.g. 48000.
         rate: Option<u32>,
     },
+    /// List or switch the hardware profile of the card behind a device (Linux),
+    /// e.g. Bluetooth A2DP (high quality) vs headset/HFP (mic).
+    CardProfile {
+        #[arg(value_enum)]
+        direction: Direction,
+        device: String,
+        profile: Option<String>,
+    },
     /// Show or set an output's left/right balance (-1 = left, 0 = centre, 1 = right).
     Balance {
         device: String,
@@ -323,6 +331,24 @@ fn run(cli: Cli) -> Result<()> {
                     println!("(the sample rate can't be changed from here on this OS/device)");
                 } else {
                     println!("available: {}", rates.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(", "));
+                }
+            }
+            Ok(())
+        }
+        Cmd::CardProfile { direction, device, profile } => {
+            let mut b = make_backend(mock)?;
+            let devices = b.devices()?;
+            let d = resolve_device(&devices, direction, &device)?.clone();
+            if let Some(p) = profile {
+                b.set_card_profile(&d.id, direction, &p)?;
+                println!("{}: profile set to {p}", d.name);
+            } else {
+                let profiles = b.card_profiles(&d.id, direction);
+                if profiles.is_empty() {
+                    println!("{}: no switchable profiles", d.name);
+                }
+                for p in profiles {
+                    println!("{} {:<40} {}", if p.active { "*" } else { " " }, p.name, p.description);
                 }
             }
             Ok(())

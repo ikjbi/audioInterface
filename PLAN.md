@@ -107,7 +107,7 @@ pavucontrol (Linux). Ordered by value. Platform limits are noted where an OS has
 - [x] 11.13 Noise floor, SNR estimate, clip counter per metered input
 - [x] 11.14 Device format info: sample rate, channels (and set the sample rate on macOS)
 - [x] 11.15 Channel balance (L/R) for outputs
-- [ ] 11.16 Bluetooth profile switch on Linux (A2DP ↔ HFP)
+- [x] 11.16 Bluetooth profile switch on Linux (A2DP ↔ HFP) (any card profile; not CI-testable since null sinks have no card)
 - [ ] 11.17 Loudness meter (EBU R128 momentary/short-term LUFS)
 
 **App quality**
