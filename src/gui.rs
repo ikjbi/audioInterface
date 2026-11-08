@@ -438,9 +438,11 @@ impl App {
                 } else {
                     "Show a live level meter for this device"
                 };
-                if ui.small_button("▶ Show level").on_hover_text(hint).clicked() {
-                    self.service.send(Request::SetMonitored(key.clone(), true));
-                }
+                ui.horizontal(|ui| {
+                    if ui.small_button("▶ Show level").on_hover_text(hint).clicked() {
+                        self.service.send(Request::SetMonitored(key.clone(), true));
+                    }
+                });
             }
         }
     }
