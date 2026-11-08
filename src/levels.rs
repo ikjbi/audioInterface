@@ -165,6 +165,45 @@ impl LevelCell {
     }
 }
 
+/// The most recent mono samples of a stream, readable without locks (for the
+/// spectrum analyzer). The audio thread overwrites a ring of atomics.
+#[derive(Debug)]
+pub struct SampleWindow {
+    data: Vec<AtomicU32>,
+    pos: std::sync::atomic::AtomicUsize,
+    pub sample_rate: u32,
+}
+
+impl SampleWindow {
+    pub fn new(len: usize, sample_rate: u32) -> Self {
+        SampleWindow {
+            data: (0..len.max(1)).map(|_| AtomicU32::new(0)).collect(),
+            pos: std::sync::atomic::AtomicUsize::new(0),
+            sample_rate,
+        }
+    }
+
+    /// Audio thread: append interleaved samples (downmixed to mono).
+    pub fn push_interleaved(&self, interleaved: &[f32], channels: usize) {
+        let ch = channels.max(1);
+        let mut pos = self.pos.load(Ordering::Relaxed);
+        for frame in interleaved.chunks_exact(ch) {
+            let mono = frame.iter().sum::<f32>() / ch as f32;
+            self.data[pos % self.data.len()].store(mono.to_bits(), Ordering::Relaxed);
+            pos = pos.wrapping_add(1);
+        }
+        self.pos.store(pos, Ordering::Release);
+    }
+
+    /// The latest `n` samples, oldest first.
+    pub fn latest(&self, n: usize) -> Vec<f32> {
+        let len = self.data.len();
+        let n = n.min(len);
+        let end = self.pos.load(Ordering::Acquire);
+        (0..n).map(|i| f32::from_bits(self.data[(end.wrapping_sub(n) + i) % len].load(Ordering::Relaxed))).collect()
+    }
+}
+
 /// Health of a monitored signal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SignalStatus {
@@ -204,6 +243,8 @@ pub struct MeterState {
     pub max_db: f32,
     /// True if the signal reached full scale recently.
     pub clipped: bool,
+    /// Number of separate clipping events since start / reset.
+    pub clip_count: u32,
     pub status: SignalStatus,
     peak_hold_at: Instant,
     clipped_at: Instant,
@@ -232,6 +273,7 @@ impl MeterState {
             peak_hold_db: FLOOR_DB,
             max_db: FLOOR_DB,
             clipped: false,
+            clip_count: 0,
             status: SignalStatus::Starting,
             peak_hold_at: now,
             clipped_at: now,
@@ -258,6 +300,9 @@ impl MeterState {
         self.max_db = self.max_db.max(peak_db);
 
         if reading.peak >= CLIP_THRESHOLD {
+            if !self.clipped {
+                self.clip_count += 1;
+            }
             self.clipped = true;
             self.clipped_at = now;
         } else if now.duration_since(self.clipped_at) > CLIP_HOLD {
@@ -286,6 +331,7 @@ impl MeterState {
 
     pub fn reset_max(&mut self) {
         self.max_db = FLOOR_DB;
+        self.clip_count = 0;
     }
 }
 
@@ -342,6 +388,22 @@ impl LevelHistory {
         self.capacity
     }
 
+    /// Background noise level: the 10th percentile of the RMS buckets
+    /// (the quietest moments, between words). `None` until enough data.
+    pub fn noise_floor(&self) -> Option<f32> {
+        let mut v: Vec<f32> = self.buckets.iter().map(|b| b.1).filter(|&r| r > FLOOR_DB).collect();
+        if v.len() < 10 {
+            return None;
+        }
+        v.sort_by(|a, b| a.total_cmp(b));
+        Some(v[v.len() / 10])
+    }
+
+    /// Signal-to-noise ratio estimate: typical speaking level minus noise floor.
+    pub fn snr(&self, gate_db: f32) -> Option<f32> {
+        Some(self.typical_level(gate_db)? - self.noise_floor()?)
+    }
+
     /// Average RMS (dB) over the buckets that contain sound above `gate_db`,
     /// i.e. a "typical speaking level" that ignores pauses. `None` if
     /// there's too little sound to judge.
@@ -392,6 +454,15 @@ mod tests {
         assert_eq!(meter_position(-30.0, -60.0), 0.5);
         assert_eq!(meter_position(-90.0, -60.0), 0.0);
         assert_eq!(meter_position(6.0, -60.0), 1.0);
+    }
+
+    #[test]
+    fn sample_window_keeps_latest_in_order() {
+        let w = SampleWindow::new(4, 48_000);
+        w.push_interleaved(&[1.0, 1.0, 2.0, 2.0, 3.0, 3.0], 2);
+        assert_eq!(w.latest(2), vec![2.0, 3.0]);
+        w.push_interleaved(&[4.0, 5.0, 6.0], 1);
+        assert_eq!(w.latest(10), vec![3.0, 4.0, 5.0, 6.0], "wraps, capped at capacity");
     }
 
     #[test]
@@ -446,6 +517,7 @@ mod tests {
         m.update(reading(1.0, 1, 1), frame, t0 + frame);
         assert!(m.level_db.abs() < 1e-3, "instant attack");
         assert!(m.clipped);
+        assert_eq!(m.clip_count, 1);
         // Silence afterwards: level falls at RELEASE_DB_PER_S, peak is held.
         m.update(reading(0.0, 2, 1), frame, t0 + frame * 2);
         assert!((m.level_db - -2.4).abs() < 1e-3, "{}", m.level_db);
@@ -481,6 +553,8 @@ mod tests {
             h.push(db, db, t0 + Duration::from_millis(i * 10));
         }
         assert_eq!(h.typical_level(-50.0), Some(-24.0), "pauses are ignored");
+        assert_eq!(h.noise_floor(), Some(-80.0));
+        assert_eq!(h.snr(-50.0), Some(56.0));
     }
 
     #[test]

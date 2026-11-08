@@ -64,6 +64,7 @@ impl AudioTap {
 
 struct Monitor {
     cell: Arc<LevelCell>,
+    window: Arc<crate::levels::SampleWindow>,
     tap: Arc<AudioTap>,
     error: Arc<Mutex<Option<String>>>,
     capture_id: String,
@@ -119,6 +120,11 @@ impl MeterEngine {
 
     pub fn cell(&self, key: &DeviceKey) -> Option<Arc<LevelCell>> {
         self.monitors.get(key).map(|m| m.cell.clone())
+    }
+
+    /// Recent samples of a running capture stream (for the spectrum view).
+    pub fn window(&self, key: &DeviceKey) -> Option<Arc<crate::levels::SampleWindow>> {
+        self.monitors.get(key).map(|m| m.window.clone())
     }
 
     /// Raw-audio tap of a running capture stream (for recording audio).
@@ -285,21 +291,30 @@ fn open(capture_id: &str) -> Result<Monitor> {
     let cell = Arc::new(LevelCell::default());
     let error = Arc::new(Mutex::new(None));
     let tap = Arc::new(AudioTap::new(config.sample_rate, config.channels));
+    let window = Arc::new(crate::levels::SampleWindow::new(8192, config.sample_rate));
 
     let stream = match supported.sample_format() {
-        SampleFormat::F32 => build::<f32>(&device, config, &cell, &tap, &error),
-        SampleFormat::F64 => build::<f64>(&device, config, &cell, &tap, &error),
-        SampleFormat::I8 => build::<i8>(&device, config, &cell, &tap, &error),
-        SampleFormat::I16 => build::<i16>(&device, config, &cell, &tap, &error),
-        SampleFormat::I24 => build::<cpal::I24>(&device, config, &cell, &tap, &error),
-        SampleFormat::I32 => build::<i32>(&device, config, &cell, &tap, &error),
-        SampleFormat::U8 => build::<u8>(&device, config, &cell, &tap, &error),
-        SampleFormat::U16 => build::<u16>(&device, config, &cell, &tap, &error),
-        SampleFormat::U32 => build::<u32>(&device, config, &cell, &tap, &error),
+        SampleFormat::F32 => build::<f32>(&device, config, &cell, &tap, &window, &error),
+        SampleFormat::F64 => build::<f64>(&device, config, &cell, &tap, &window, &error),
+        SampleFormat::I8 => build::<i8>(&device, config, &cell, &tap, &window, &error),
+        SampleFormat::I16 => build::<i16>(&device, config, &cell, &tap, &window, &error),
+        SampleFormat::I24 => build::<cpal::I24>(&device, config, &cell, &tap, &window, &error),
+        SampleFormat::I32 => build::<i32>(&device, config, &cell, &tap, &window, &error),
+        SampleFormat::U8 => build::<u8>(&device, config, &cell, &tap, &window, &error),
+        SampleFormat::U16 => build::<u16>(&device, config, &cell, &tap, &window, &error),
+        SampleFormat::U32 => build::<u32>(&device, config, &cell, &tap, &window, &error),
         other => Err(anyhow!("unsupported sample format {other:?}")),
     }?;
     stream.play().context("start capture stream")?;
-    Ok(Monitor { cell, tap, error, capture_id: capture_id.to_string(), started: Instant::now(), _stream: stream })
+    Ok(Monitor {
+        cell,
+        window,
+        tap,
+        error,
+        capture_id: capture_id.to_string(),
+        started: Instant::now(),
+        _stream: stream,
+    })
 }
 
 fn build<T>(
@@ -307,6 +322,7 @@ fn build<T>(
     config: cpal::StreamConfig,
     cell: &Arc<LevelCell>,
     tap: &Arc<AudioTap>,
+    window: &Arc<crate::levels::SampleWindow>,
     error: &Arc<Mutex<Option<String>>>,
 ) -> Result<cpal::Stream>
 where
@@ -315,6 +331,8 @@ where
 {
     let cell = cell.clone();
     let tap = tap.clone();
+    let window = window.clone();
+    let channels = config.channels as usize;
     let err = error.clone();
     let mut buf: Vec<f32> = Vec::with_capacity(16 * 1024);
     let stream = device.build_input_stream::<T, _, _>(
@@ -324,6 +342,7 @@ where
             buf.extend(data.iter().map(|s| s.to_sample::<f32>()));
             cell.push(&buf);
             tap.feed(&buf);
+            window.push_interleaved(&buf, channels);
         },
         move |e| {
             log::warn!("capture stream error: {e}");

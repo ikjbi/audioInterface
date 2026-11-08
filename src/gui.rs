@@ -67,6 +67,7 @@ struct View {
     meter_errors: HashMap<DeviceKey, String>,
     monitored: BTreeSet<DeviceKey>,
     native_metered: BTreeSet<DeviceKey>,
+    windows: HashMap<DeviceKey, Arc<crate::levels::SampleWindow>>,
     recordings: Vec<ActiveRecording>,
     finished: Vec<FinishedRecording>,
 }
@@ -98,6 +99,9 @@ struct App {
     hidden: bool,
     /// Quit was chosen (don't hide to tray on close).
     quitting: bool,
+    /// Devices with the spectrum analyzer open, and their smoothed bands.
+    spectra: HashMap<DeviceKey, Vec<f32>>,
+    analyzer: crate::spectrum::Analyzer,
     /// Running test tools (speaker test, mic test, monitor), per device.
     tools: Vec<(DeviceKey, &'static str, crate::audio_tools::ToolHandle)>,
 }
@@ -132,6 +136,8 @@ impl App {
             hidden: false,
             quitting: false,
             tools: Vec::new(),
+            spectra: HashMap::new(),
+            analyzer: crate::spectrum::Analyzer::new(),
             recordings_panel: RecordingsPanel {
                 open: std::env::var("AUDIO_INTERFACE_OPEN").is_ok_and(|v| v == "recordings"),
                 ..RecordingsPanel::default()
@@ -192,6 +198,7 @@ impl App {
             meter_errors: snap.meter_errors.clone(),
             monitored: snap.monitored.clone(),
             native_metered: snap.native_metered.clone(),
+            windows: snap.windows.clone(),
             recordings: snap.recordings.clone(),
             finished: snap.finished.iter().cloned().collect(),
         };
@@ -662,22 +669,54 @@ impl App {
                     };
                     ui.label(RichText::new(txt).color(color)).on_hover_text(m.status.label());
                 }
+                if self.view.windows.contains_key(&key) {
+                    let open = self.spectra.contains_key(&key);
+                    if ui.selectable_label(open, "📊").on_hover_text("Spectrum analyzer").clicked() {
+                        if open {
+                            self.spectra.remove(&key);
+                        } else {
+                            self.spectra.insert(key.clone(), vec![crate::levels::FLOOR_DB; crate::spectrum::BANDS]);
+                        }
+                    }
+                }
                 if user_monitored && ui.small_button("■").on_hover_text("Stop metering").clicked() {
                     self.service.send(Request::SetMonitored(key.clone(), false));
                 }
             });
+            if let (Some(win), true) = (self.view.windows.get(&key).cloned(), self.spectra.contains_key(&key)) {
+                let samples = win.latest(crate::spectrum::FFT_SIZE);
+                let fresh = self.analyzer.bands(&samples, win.sample_rate);
+                let bands = self.spectra.get_mut(&key).unwrap();
+                // Fast attack, ~30 dB/s release.
+                for (b, f) in bands.iter_mut().zip(fresh) {
+                    *b = f.max(*b - 1.0);
+                }
+                let w = (ui.available_width() - 150.0).max(60.0);
+                draw_spectrum(ui, bands, floor, Vec2::new(w, 70.0));
+            }
             if d.direction == Direction::Input
                 && let Some(h) = self.history.get(&key)
             {
                 ui.horizontal(|ui| {
                     let w = (ui.available_width() - 150.0).max(60.0);
                     draw_history(ui, h, floor, Vec2::new(w, 36.0));
-                    let typical = h.typical_level(floor.max(-60.0) + 10.0);
+                    let gate = floor.max(-60.0) + 10.0;
+                    let typical = h.typical_level(gate);
+                    let mut stats = match typical {
+                        Some(db) => format!("typical {db:.0} dB"),
+                        None => "last 30 s".to_string(),
+                    };
+                    if let Some(n) = h.noise_floor() {
+                        stats += &format!("\nnoise {n:.0} dB");
+                    }
+                    if let Some(snr) = h.snr(gate) {
+                        stats += &format!(" · SNR {snr:.0}");
+                    }
+                    if m.clip_count > 0 {
+                        stats += &format!("\nclips {}", m.clip_count);
+                    }
                     ui.label(
-                        RichText::new(match typical {
-                            Some(db) => format!("typical\n{db:.0} dB RMS"),
-                            None => "last 30 s".to_string(),
-                        })
+                        RichText::new(stats)
                         .small()
                         .color(MUTED_TEXT),
                     )
@@ -1100,6 +1139,44 @@ fn draw_meter(ui: &mut egui::Ui, m: &MeterState, floor_db: f32, size: Vec2) {
     if m.clipped {
         let r = egui::Rect::from_min_size(egui::pos2(rect.right() - 6.0, rect.top()), Vec2::new(6.0, rect.height()));
         painter.rect_filled(r, 0.0, RED);
+    }
+}
+
+/// Spectrum bars on a log-frequency axis, coloured like the meters.
+fn draw_spectrum(ui: &mut egui::Ui, bands: &[f32], floor_db: f32, size: Vec2) {
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
+    let n = bands.len().max(1) as f32;
+    let w = rect.width() / n;
+    for (i, db) in bands.iter().enumerate() {
+        let frac = meter_position(*db, floor_db);
+        if frac <= 0.0 {
+            continue;
+        }
+        let [r, g, b] = crate::icon::meter_color(frac);
+        let x0 = rect.left() + i as f32 * w;
+        let bar = egui::Rect::from_min_max(
+            egui::pos2(x0 + 0.5, rect.bottom() - frac * rect.height()),
+            egui::pos2(x0 + w - 0.5, rect.bottom()),
+        );
+        painter.rect_filled(bar, 1.0, Color32::from_rgb(r, g, b));
+    }
+    // Frequency labels.
+    let span = (crate::spectrum::F_MAX / crate::spectrum::F_MIN).ln();
+    for (f, label) in [(100.0f32, "100"), (1000.0, "1k"), (10_000.0, "10k")] {
+        let x = rect.left() + rect.width() * ((f / crate::spectrum::F_MIN).ln() / span);
+        painter.line_segment(
+            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+            Stroke::new(1.0, Color32::from_white_alpha(25)),
+        );
+        painter.text(
+            egui::pos2(x + 2.0, rect.top() + 1.0),
+            egui::Align2::LEFT_TOP,
+            label,
+            egui::FontId::proportional(9.0),
+            MUTED_TEXT,
+        );
     }
 }
 

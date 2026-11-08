@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Spectrum analyzer** (📊 on capture-metered devices): 48 log-spaced bands from 20 Hz to 20 kHz,
+  Hann-windowed FFT.
+- **Noise floor, SNR and clip counter** under each metered input.
 - **Test tools** (right-click a device): speaker test tone (left/right/both), mic test (record 5 s and
   play back), and live mic monitoring with a volume control. CLI: `test-tone`, `mic-test`.
 - **Global hotkeys** (configurable, Settings → Global hotkeys): Ctrl+Alt+M mutes/unmutes the mic,

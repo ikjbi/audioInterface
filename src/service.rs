@@ -81,6 +81,8 @@ pub struct Snapshot {
     pub events: VecDeque<Event>,
     /// Level cells for every metered device.
     pub levels: HashMap<DeviceKey, Arc<LevelCell>>,
+    /// Recent raw samples of capture-metered devices (spectrum view).
+    pub windows: HashMap<DeviceKey, Arc<crate::levels::SampleWindow>>,
     /// Why metering failed for a device.
     pub meter_errors: HashMap<DeviceKey, String>,
     /// Devices the user asked to meter (on top of the automatic ones).
@@ -439,6 +441,8 @@ impl Worker {
             .collect();
         let meter_errors =
             self.devices.iter().filter_map(|d| self.meters.error(&d.key()).map(|e| (d.key(), e))).collect();
+        let windows: HashMap<DeviceKey, Arc<crate::levels::SampleWindow>> =
+            self.devices.iter().filter_map(|d| self.meters.window(&d.key()).map(|w| (d.key(), w))).collect();
         let native: BTreeSet<DeviceKey> = self.native_cells.keys().cloned().collect();
         let devices = self.devices.clone();
         let monitored = self.monitored.clone();
@@ -456,6 +460,7 @@ impl Worker {
         s.recordings = recordings;
         s.devices = devices;
         s.levels = levels;
+        s.windows = windows;
         s.meter_errors = meter_errors;
         s.monitored = monitored;
         s.native_metered = native;
