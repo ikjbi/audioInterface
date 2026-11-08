@@ -37,8 +37,26 @@ and the OS sound settings. It runs on **Windows, macOS and Linux**.
   mic"), or did the gain stay the same while the level fell (mic position, headset, Bluetooth)?
 - **"In use by" + auto-record calls:** shows which app is using each device (Teams, Zoom, …), and
   can start recording automatically when a call starts and stop when it ends.
+- **"Gain lowered by another app" alerts:** a notification (and a log entry, also inside any
+  recording) when something else drops your mic gain, naming the app using the mic.
+- **Profiles:** save your setup (defaults, volumes, mutes, gain locks) as "Calls", "Music", …
+  and switch in one click, from the tray, or with `audio-interface profile apply calls`.
+- **Global hotkeys:** Ctrl+Alt+M mutes/unmutes the mic anywhere; Ctrl+Alt+O / Ctrl+Alt+I switch
+  to the next output/input. Configurable.
+- **Tray / menu-bar icon** (Windows, macOS): switch devices, mute, profiles, recording.
+- **Per-app mixer** (Windows, Linux): volume and mute per application.
+- **Pro metering:** spectrum analyzer, EBU R128 loudness (momentary/short-term LUFS), noise
+  floor, SNR estimate, clip counter, 30 s level history.
+- **Test tools:** speaker test tones (left/right), mic test (record 5 s and play back), and
+  live "hear yourself" monitoring.
+- **Device details:** sample rate and channels, sample-rate switching (macOS), left/right
+  balance, Bluetooth/card profile switching (Linux, e.g. A2DP ↔ headset), and a separate
+  communications device for Teams/Zoom (Windows).
+- **Comfort:** rename or hide devices, start at login, desktop notifications, light/dark theme,
+  single instance, diagnostics for bug reports, settings export/import.
 - **Event log:** connects, disconnects, default changes, gain restores and errors.
-- **Scriptable CLI:** everything above is also available from the terminal.
+- **Scriptable CLI:** everything above is also available from the terminal
+  (`audio-interface --help`).
 
 ## Install / build
 
@@ -86,6 +104,10 @@ audio-interface record                   # log the default input until Ctrl+C, t
 audio-interface record "Headset" --audio --seconds 3600
 audio-interface record --auto --app teams   # headless: record every Teams call
 audio-interface analyze "Documents/Audio Interface Recordings/<file>.csv"
+audio-interface profile save Calls       # profiles: list | save | apply | delete
+audio-interface apps                     # per-app mixer: apps, app-volume, app-mute
+audio-interface test-tone --channel left # also: mic-test, balance, sample-rate, card-profile
+audio-interface diagnostics              # for bug reports
 ```
 
 Devices can be given by ID, exact name, or any unique part of the name (case-insensitive).
