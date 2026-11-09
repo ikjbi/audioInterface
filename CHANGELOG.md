@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+- Release files include the version in their name, e.g. `audio-interface-0.1.2-windows-x86_64.zip`.
+  The README links to the latest release page instead of fixed file names.
+
 ## [0.1.1] - 2026-11-09
 
 ### Fixed

@@ -15,16 +15,17 @@ administrator / root rights**, unless a section says otherwise.
 - [Corporate / locked-down machines](#corporate--locked-down-machines)
 
 Pre-built downloads are attached to each
-[GitHub release](https://github.com/ikjbi/audioInterface/releases) (the links above always point to the newest one).
+[GitHub release](https://github.com/ikjbi/audioInterface/releases) (the latest release link always shows the newest one).
 
 ---
 
 ## Quick start: download and run
 
-1. Download the file for your computer:
-   - **Windows:** [audio-interface-windows-x86_64.zip](https://github.com/ikjbi/audioInterface/releases/latest/download/audio-interface-windows-x86_64.zip)
-   - **macOS:** [audio-interface-macos-universal.zip](https://github.com/ikjbi/audioInterface/releases/latest/download/audio-interface-macos-universal.zip)
-   - **Linux:** [audio-interface-linux-x86_64.tar.gz](https://github.com/ikjbi/audioInterface/releases/latest/download/audio-interface-linux-x86_64.tar.gz)
+1. Open the **[latest release](https://github.com/ikjbi/audioInterface/releases/latest)** and download the file for your computer from *Assets*.
+   The file names include the version (e.g. `audio-interface-0.1.2-windows-x86_64.zip`):
+   - **Windows:** `audio-interface-<version>-windows-x86_64.zip`
+   - **macOS:** `audio-interface-<version>-macos-universal.zip`
+   - **Linux:** `audio-interface-<version>-linux-x86_64.tar.gz`
 2. Follow the steps for your OS below. The app is not code-signed yet, so the first launch needs
    one extra click:
    - **Windows:** "Windows protected your PC" → **More info** → **Run anyway**.
@@ -43,7 +44,7 @@ Windows 10 or 11, 64-bit.
 
 ### Portable zip (recommended, no admin)
 
-1. Download `audio-interface-windows-x86_64.zip` from the releases page.
+1. Download `audio-interface-<version>-windows-x86_64.zip` from the [latest release](https://github.com/ikjbi/audioInterface/releases/latest).
 2. Extract it to a folder you own, e.g. `%LOCALAPPDATA%\Programs\AudioInterface`
    (paste that path into the File Explorer address bar). A USB stick works too.
 3. Run `audio-interface.exe`.
@@ -104,8 +105,8 @@ by default.
 ### Portable tar.gz (recommended, no sudo)
 
 ```sh
-tar xzf audio-interface-linux-x86_64.tar.gz
-cd audio-interface-linux-x86_64
+tar xzf audio-interface-*-linux-x86_64.tar.gz
+cd audio-interface-*-linux-x86_64
 ./install-user.sh              # installs to ~/.local/bin and adds a menu entry
 ./install-user.sh --autostart  # optional: start at login
 ```
@@ -166,7 +167,7 @@ macOS 12 or newer (macOS 14+ for "which app is using the mic"). Works on Apple S
 
 ### Download (recommended, no admin)
 
-1. Download [audio-interface-macos-universal.zip](https://github.com/ikjbi/audioInterface/releases/latest/download/audio-interface-macos-universal.zip) and
+1. Download `audio-interface-<version>-macos-universal.zip` from the [latest release](https://github.com/ikjbi/audioInterface/releases/latest) and
    double-click it to unzip.
 2. Drag **Audio Interface** into **Applications**. Your own `~/Applications` folder works too,
    without admin rights.

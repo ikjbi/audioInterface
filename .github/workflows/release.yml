@@ -50,12 +50,15 @@ jobs:
           v="${GITHUB_REF_NAME#v}"
           # Bundle versions must be numeric: 0.1.0-alpha.1 -> 0.1.0
           echo "version=${v%%-*}" >> "$GITHUB_OUTPUT"
+          # Full version (with any -alpha suffix) for file names, so downloads show which
+          # release they are: audio-interface-0.1.2-windows-x86_64.zip
+          echo "full=$v" >> "$GITHUB_OUTPUT"
 
       - name: Build (Linux)
         if: runner.os == 'Linux'
         run: |
           cargo build --release --locked
-          PKG=audio-interface-${{ matrix.name }}
+          PKG=audio-interface-${{ steps.v.outputs.full }}-${{ matrix.name }}
           mkdir -p dist/$PKG
           cp target/release/audio-interface assets/icon.png packaging/linux/install-user.sh packaging/linux/audio-interface.desktop dist/$PKG/
           cp docs/INSTALL.md README.md LICENSE dist/$PKG/
@@ -69,7 +72,7 @@ jobs:
           cargo build --release --locked
           mkdir -p dist/pkg
           cp target/release/audio-interface.exe "packaging/windows/Install shortcuts.cmd" packaging/windows/README.txt LICENSE dist/pkg/
-          (cd dist/pkg && 7z a ../audio-interface-${{ matrix.name }}.zip .)
+          (cd dist/pkg && 7z a ../audio-interface-${{ steps.v.outputs.full }}-${{ matrix.name }}.zip .)
           rm -rf dist/pkg
 
       - name: Build (macOS universal .app)
@@ -82,7 +85,7 @@ jobs:
             target/aarch64-apple-darwin/release/audio-interface \
             target/x86_64-apple-darwin/release/audio-interface
           bash scripts/bundle-macos.sh dist/audio-interface "${{ steps.v.outputs.version }}" dist
-          (cd dist && ditto -c -k --keepParent "Audio Interface.app" audio-interface-${{ matrix.name }}.zip)
+          (cd dist && ditto -c -k --keepParent "Audio Interface.app" audio-interface-${{ steps.v.outputs.full }}-${{ matrix.name }}.zip)
           rm -rf "dist/Audio Interface.app" dist/audio-interface
 
       - uses: actions/upload-artifact@v4

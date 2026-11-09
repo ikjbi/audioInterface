@@ -15,15 +15,18 @@ and the OS sound settings. It runs on **Windows, macOS and Linux**.
 
 ## Download
 
-| OS | Download | Then |
+**[⬇ Download the latest release](https://github.com/ikjbi/audioInterface/releases/latest)**, then pick the file for your computer under
+*Assets*. Each file name includes its version, so you can tell which one is newest:
+
+| OS | File | Then |
 |---|---|---|
-| **Windows 10/11** (64-bit) | [audio-interface-windows-x86_64.zip](https://github.com/ikjbi/audioInterface/releases/latest/download/audio-interface-windows-x86_64.zip) | Unzip, run `audio-interface.exe` |
-| **macOS 12+** (Apple Silicon and Intel) | [audio-interface-macos-universal.zip](https://github.com/ikjbi/audioInterface/releases/latest/download/audio-interface-macos-universal.zip) | Unzip, move *Audio Interface* to Applications |
-| **Linux** (x86-64, PulseAudio/PipeWire) | [audio-interface-linux-x86_64.tar.gz](https://github.com/ikjbi/audioInterface/releases/latest/download/audio-interface-linux-x86_64.tar.gz) | Extract, run `./install-user.sh` |
+| **Windows 10/11** (64-bit) | `audio-interface-<version>-windows-x86_64.zip` | Unzip, run `audio-interface.exe` |
+| **macOS 12+** (Apple Silicon and Intel) | `audio-interface-<version>-macos-universal.zip` | Unzip, move *Audio Interface* to Applications |
+| **Linux** (x86-64, PulseAudio/PipeWire) | `audio-interface-<version>-linux-x86_64.tar.gz` | Extract, run `./install-user.sh` |
 
 No admin rights needed on any OS. Step-by-step instructions, including what to click when
 Windows or macOS warns about an app from an unidentified developer, are in
-**[docs/INSTALL.md](docs/INSTALL.md)**. All versions are on the
+**[docs/INSTALL.md](docs/INSTALL.md)**. Older versions are on the
 [Releases page](https://github.com/ikjbi/audioInterface/releases).
 
 ## What it does
