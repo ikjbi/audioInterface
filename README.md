@@ -82,6 +82,25 @@ Pre-built binaries for each OS are attached to
 | **macOS 12+** | CoreAudio `AudioObject` properties | CoreAudio capture (inputs) | The first time a mic is metered, macOS asks for **microphone permission** for the app (or for your terminal, if you run it from one). Approve it under *System Settings → Privacy & Security → Microphone*. |
 | **Linux** | PulseAudio native protocol (pure Rust, no libpulse) | PulseAudio capture (inputs and output monitors) | Works on PipeWire systems through `pipewire-pulse`, which is the default on modern distros. Building needs `libasound2-dev` and `pkg-config`. |
 
+### Feature availability
+
+| Feature | Windows | macOS | Linux |
+|---|:-:|:-:|:-:|
+| List devices, set defaults, volume, mute | ✅ | ✅ | ✅ |
+| Level meters, history, spectrum, LUFS, noise/SNR | ✅ | ✅ | ✅ |
+| Gain lock, auto-switch, profiles | ✅ | ✅ | ✅ |
+| Session recording + drop analysis, auto-record calls | ✅ | ✅ | ✅ |
+| "In use by" app detection | ✅ | ✅ (macOS 14+) | ✅ |
+| Output meters without capture | ✅ (native) | – | ✅ (monitor) |
+| Per-app volume / mute mixer | ✅ | – (no public API) | ✅ |
+| Separate communications device | ✅ | – | – |
+| Sample-rate switching | – (shown) | ✅ | – (shown) |
+| Left/right balance | ✅ | ✅ (per-channel devices) | ✅ |
+| Card / Bluetooth profile switching | – | – | ✅ |
+| Tray / menu-bar icon | ✅ | ✅ | – (would need GTK) |
+| Global hotkeys | ✅ | ✅ | ✅ (X11) |
+| Notifications, start at login, test tools | ✅ | ✅ | ✅ |
+
 Linux build dependencies (Debian/Ubuntu):
 
 ```sh
