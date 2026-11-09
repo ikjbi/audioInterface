@@ -166,3 +166,9 @@ pavucontrol (Linux). Ordered by value. Platform limits are noted where an OS has
     per-app mixer
 - Linux CI caught a real bug: test tones were cut off when PulseAudio took the whole tone into a
   large buffer up front. Fixed by keeping the stream alive until the delivered frames have played.
+- **01:25** All 8 CI jobs green (`2286744`). Linux integration measured:
+  - recording RMS of −9.03 dBFS (exact for a 0.5-amplitude sine) and a 16 kHz WAV
+  - gain change found in the report; test tone peak 0.125 and mic-test playback 0.5 (both as
+    predicted); balance 80/40; `parecord` detected as in use; per-app volume and mute applied
+  - A manual `Linux audio debug` workflow (`.github/workflows/linux-debug.yml`) was added for
+    fast audio investigations.
