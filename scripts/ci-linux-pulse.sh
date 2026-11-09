@@ -150,34 +150,39 @@ $BIN analyze "$CSV" | tee report.txt
 grep -q "OS gain lowered from 100% to 50%" report.txt || fail "gain change not found in report"
 $BIN analyze "$CSV" --json | python3 -c 'import json,sys; r=json.load(sys.stdin); assert any(f["kind"]=="gain_change" for f in r["findings"])'
 
-step "speaker test tone (metered through the sink monitor)"
-( sleep 0.3; $BIN test-tone ci_headphones --channel left ) &
-out=$($BIN meter --direction output ci_headphones --seconds 2 | tr '\r' '\n' | grep '^summary:')
-wait
-echo "$out"
-python3 - "$out" <<'EOF3'
-import re, sys
-max_db = float(re.search(r"max_db=(-?[\d.]+)", sys.argv[1]).group(1))
-# 0.25 amplitude tone = -12 dBFS
-assert -15 < max_db < -9, max_db
-print("test tone OK")
-EOF3
+# Peak of a raw s16le mono capture file.
+peak_of() { python3 -c '
+import sys, struct
+d = open(sys.argv[1], "rb").read()
+n = len(d) // 2
+s = struct.unpack("<%dh" % n, d[: n * 2]) if n else []
+print(max((abs(x) for x in s), default=0) / 32768)
+' "$1"; }
+
+# Output checks capture the sink monitor with parec (independent of our own meter).
+step "speaker test tone"
+parec --device=ci_headphones.monitor --format=s16le --rate=48000 --channels=1 --raw > tone_cap.raw &
+PR=$!
+sleep 0.5
+$BIN test-tone ci_headphones --channel left
+sleep 0.3
+kill $PR
+P=$(peak_of tone_cap.raw)
+echo "captured peak: $P"
+# 0.25 amplitude on the left only, downmixed to mono = 0.125
+python3 -c "import sys; p=float('$P'); sys.exit(0 if 0.08 < p < 0.3 else 1)" || fail "test tone peak $P"
 
 step "mic test (record the sine mic, play it back on ci_speakers)"
-$BIN set-default output ci_speakers
-( $BIN mic-test --input ci_sine_mic --output ci_speakers --seconds 2 ) &
-MT=$!
-sleep 2.4
-out=$($BIN meter --direction output ci_speakers --seconds 1.5 | tr '\r' '\n' | grep '^summary:')
-wait $MT
-echo "$out"
-python3 - "$out" <<'EOF4'
-import re, sys
-max_db = float(re.search(r"max_db=(-?[\d.]+)", sys.argv[1]).group(1))
-# The 0.5-amplitude sine played back: about -6 dBFS
-assert -10 < max_db < -3, max_db
-print("mic test playback OK")
-EOF4
+parec --device=ci_speakers.monitor --format=s16le --rate=48000 --channels=1 --raw > mic_cap.raw &
+PR=$!
+sleep 0.5
+$BIN mic-test --input ci_sine_mic --output ci_speakers --seconds 2
+sleep 0.3
+kill $PR
+P=$(peak_of mic_cap.raw)
+echo "captured peak: $P"
+# The 0.5-amplitude sine, recorded and played back
+python3 -c "import sys; p=float('$P'); sys.exit(0 if 0.3 < p < 0.7 else 1)" || fail "mic test playback peak $P"
 
 step "per-app mixer"
 pacat --playback --device=ci_headphones --format=s16le --rate=48000 --channels=2 tone.raw &
