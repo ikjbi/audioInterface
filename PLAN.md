@@ -64,7 +64,7 @@ Status key: `[x]` done · `[~]` partially done / see notes · `[ ]` not started
 
 ## Phase 8: Polish (stretch)
 - [x] 30 s level history graph + typical-level readout (gain drift at a glance)
-- [ ] System tray / menu bar icon
+- [x] System tray / menu bar icon (see 11.3)
 - [x] App icon and bundling (new icon embedded in the Windows .exe; macOS .app; portable Windows zip and Linux tar.gz with user-level install scripts)
 - [x] Animated splash screen
 - [x] No-admin install guide (docs/INSTALL.md), with both sudo-free build paths tested in CI
