@@ -85,11 +85,18 @@ struct App {
     service: Service,
     settings: Settings,
     settings_path: Option<PathBuf>,
-    settings_dirty: bool,
+    /// Settings changed and not yet saved, since when (saves are debounced).
+    settings_dirty: Option<Instant>,
     meters: HashMap<DeviceKey, MeterState>,
     history: HashMap<DeviceKey, LevelHistory>,
     loudness: HashMap<DeviceKey, crate::levels::Loudness>,
     last_frame: Instant,
+    /// Time since the previous frame (for frame-rate independent animation).
+    frame_dt: Duration,
+    /// (generation, total events) of the snapshot the view was built from.
+    view_version: Option<(u64, u64)>,
+    /// Last window visibility sent to the service.
+    sent_visible: Option<bool>,
     /// Slider value being dragged, so refreshes don't make it jump.
     dragging: Option<(DeviceKey, f32)>,
     show_settings: bool,
@@ -120,6 +127,25 @@ struct App {
     analyzer: crate::spectrum::Analyzer,
     /// Running test tools (speaker test, mic test, monitor), per device.
     tools: Vec<(DeviceKey, &'static str, crate::audio_tools::ToolHandle)>,
+    /// "Check for updates" progress, written by a background thread.
+    update: Arc<std::sync::Mutex<UpdateState>>,
+}
+
+/// State of the in-app updater (see [`crate::updater`]).
+#[derive(Clone, Debug, Default)]
+enum UpdateState {
+    #[default]
+    Idle,
+    Checking,
+    UpToDate,
+    Available(crate::updater::Release),
+    Downloading {
+        done: u64,
+        total: u64,
+    },
+    /// Installed; the main thread restarts into it.
+    Installed(Arc<crate::updater::Installed>),
+    Failed(String),
 }
 
 const GREEN: Color32 = Color32::from_rgb(0x3f, 0xb9, 0x50);
@@ -134,13 +160,16 @@ impl App {
             service,
             settings,
             settings_path,
-            settings_dirty: false,
+            settings_dirty: None,
             meters: HashMap::new(),
             history: HashMap::new(),
             loudness: HashMap::new(),
             last_frame: Instant::now(),
+            frame_dt: Duration::ZERO,
+            view_version: None,
+            sent_visible: None,
             dragging: None,
-            show_settings: false,
+            show_settings: std::env::var("AUDIO_INTERFACE_OPEN").is_ok_and(|v| v == "settings"),
             show_log: true,
             view: View::default(),
             frame_count: 0,
@@ -157,6 +186,7 @@ impl App {
             quitting: false,
             show_requested: None,
             tools: Vec::new(),
+            update: Arc::default(),
             spectra: HashMap::new(),
             analyzer: crate::spectrum::Analyzer::new(),
             recordings_panel: RecordingsPanel {
@@ -165,6 +195,16 @@ impl App {
             },
             screenshot: std::env::var_os(SCREENSHOT_ENV).map(|p| (PathBuf::from(p), Arc::new(AtomicBool::new(false)))),
         }
+    }
+
+    /// Whether anything on screen is moving: a meter showing (or falling from)
+    /// a level, or an open spectrum. Windows meters every output natively, so
+    /// "has meters" alone would keep redrawing at full speed in silence.
+    fn animating(&self) -> bool {
+        let floor = crate::levels::FLOOR_DB + 0.5;
+        !self.spectra.is_empty()
+            || !self.tools.is_empty()
+            || self.meters.values().any(|m| m.level_db > floor || m.peak_hold_db > floor || m.clipped)
     }
 
     /// Screenshot mode: request a capture after a while, then close once saved.
@@ -188,12 +228,15 @@ impl App {
 
     fn settings_changed(&mut self) {
         self.service.send(Request::UpdateSettings(self.settings.clone()));
-        self.settings_dirty = true;
+        self.settings_dirty.get_or_insert_with(Instant::now);
     }
 
-    fn save_settings_if_needed(&mut self) {
-        if self.settings_dirty && self.dragging.is_none() {
-            self.settings_dirty = false;
+    /// Write settings once changes have settled for a second (so dragging a
+    /// slider doesn't write the file every frame), or right away on exit.
+    fn save_settings_if_needed(&mut self, now: bool) {
+        let settled = self.settings_dirty.is_some_and(|t| t.elapsed() >= Duration::from_secs(1));
+        if self.settings_dirty.is_some() && (now || (settled && self.dragging.is_none())) {
+            self.settings_dirty = None;
             if let Some(path) = &self.settings_path
                 && let Err(e) = self.settings.save(path)
             {
@@ -207,25 +250,32 @@ impl App {
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).min(Duration::from_millis(250));
         self.last_frame = now;
+        self.frame_dt = dt;
 
         let snap = self.service.snapshot();
-        self.view = View {
-            api: snap.api,
-            supports_comms: snap.supports_comms,
-            meter_host: snap.meter_host,
-            devices: snap.devices.clone(),
-            error: snap.error.clone(),
-            events: snap.events.iter().rev().take(100).cloned().collect(),
-            meter_errors: snap.meter_errors.clone(),
-            monitored: snap.monitored.clone(),
-            native_metered: snap.native_metered.clone(),
-            windows: snap.windows.clone(),
-            sample_rates: snap.sample_rates.clone(),
-            card_profiles: snap.card_profiles.clone(),
-            app_streams: snap.app_streams.clone(),
-            recordings: snap.recordings.clone(),
-            finished: snap.finished.iter().cloned().collect(),
-        };
+        // The snapshot only changes on a device refresh (2x/s) or a new event, so
+        // the (deep) copy is only redone then, not every frame.
+        let version = (snap.generation, snap.total_events);
+        if self.view_version != Some(version) {
+            self.view_version = Some(version);
+            self.view = View {
+                api: snap.api,
+                supports_comms: snap.supports_comms,
+                meter_host: snap.meter_host,
+                devices: snap.devices.clone(),
+                error: snap.error.clone(),
+                events: snap.events.iter().rev().take(100).cloned().collect(),
+                meter_errors: snap.meter_errors.clone(),
+                monitored: snap.monitored.clone(),
+                native_metered: snap.native_metered.clone(),
+                windows: snap.windows.clone(),
+                sample_rates: snap.sample_rates.clone(),
+                card_profiles: snap.card_profiles.clone(),
+                app_streams: snap.app_streams.clone(),
+                recordings: snap.recordings.clone(),
+                finished: snap.finished.iter().cloned().collect(),
+            };
+        }
         let readings: Vec<_> = snap.levels.iter().map(|(k, c)| (k.clone(), c.take())).collect();
         drop(snap);
 
@@ -255,6 +305,14 @@ impl App {
                 }
                 if ui.button("⚙ Settings").clicked() {
                     self.show_settings = !self.show_settings;
+                }
+                if let UpdateState::Available(r) = self.update_state()
+                    && ui
+                        .button(RichText::new(format!("⬆ Update to {}", r.version)).color(GREEN))
+                        .on_hover_text("A newer version is available (see Settings → Updates)")
+                        .clicked()
+                {
+                    self.show_settings = true;
                 }
                 let n = self.view.recordings.len();
                 let rec_label = if n > 0 {
@@ -821,8 +879,12 @@ impl App {
         let user_monitored = self.view.monitored.contains(&key);
         // Auto-range: extend the scale below the device's noise floor so quiet mics
         // (e.g. analog headsets on a laptop jack) still move the meters visibly.
+        // Noise floor, speech gate and typical level, computed once per frame.
         let noise = self.history.get(&key).and_then(|h| h.noise_floor());
         let floor = crate::levels::display_floor(self.settings.meter_floor_db, noise);
+        let gate = crate::levels::speech_gate(noise);
+        let typical =
+            self.history.get(&key).filter(|_| d.direction == Direction::Input).and_then(|h| h.typical_level(gate));
 
         let mut want_help = false;
         if let Some(m) = self.meters.get(&key) {
@@ -862,9 +924,10 @@ impl App {
                 let samples = win.latest(crate::spectrum::FFT_SIZE);
                 let fresh = self.analyzer.bands(&samples, win.sample_rate);
                 let bands = self.spectra.get_mut(&key).unwrap();
-                // Fast attack, ~30 dB/s release.
+                // Fast attack, 30 dB/s release.
+                let fall = 30.0 * self.frame_dt.as_secs_f32();
                 for (b, f) in bands.iter_mut().zip(fresh) {
-                    *b = f.max(*b - 1.0);
+                    *b = f.max(*b - fall);
                 }
                 let w = (ui.available_width() - 150.0).max(60.0);
                 draw_spectrum(ui, bands, floor, Vec2::new(w, 70.0));
@@ -875,13 +938,11 @@ impl App {
                 ui.horizontal(|ui| {
                     let w = (ui.available_width() - 150.0).max(60.0);
                     draw_history(ui, h, floor, Vec2::new(w, 36.0));
-                    let gate = crate::levels::speech_gate(h.noise_floor());
-                    let typical = h.typical_level(gate);
                     // Always four lines, so the card never changes height as values come and go.
                     let dash = "–".to_string();
                     let l1 = typical.map(|db| format!("typical {db:.0} dB")).unwrap_or_else(|| format!("typical {dash}"));
-                    let l2 = match (h.noise_floor(), h.snr(gate)) {
-                        (Some(n), Some(snr)) => format!("noise {n:.0} dB · SNR {snr:.0}"),
+                    let l2 = match (noise, typical) {
+                        (Some(n), Some(t)) => format!("noise {n:.0} dB · SNR {:.0}", t - n),
                         (Some(n), None) => format!("noise {n:.0} dB"),
                         _ => format!("noise {dash}"),
                     };
@@ -909,11 +970,6 @@ impl App {
             }
             // One status line with a fixed height (most important message first),
             // so warnings appearing and disappearing never resize the card.
-            let typical = self
-                .history
-                .get(&key)
-                .filter(|_| d.direction == Direction::Input)
-                .and_then(|h| h.typical_level(crate::levels::speech_gate(h.noise_floor())));
             let weak = typical.filter(|t| *t < crate::levels::WEAK_SPEECH_DB);
             let (text, color, sound_button) = if !native && m.status == SignalStatus::Lost {
                 ("⚠ Signal lost: no audio is arriving from this device.".to_string(), RED, false)
@@ -1002,7 +1058,7 @@ impl App {
     fn settings_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_settings;
         let mut changed = false;
-        egui::Window::new("Settings").open(&mut open).resizable(true).default_width(420.0).show(ctx, |ui| {
+        egui::Window::new("Settings").open(&mut open).resizable(true).vscroll(true).default_width(420.0).show(ctx, |ui| {
             ui.heading("General");
             let mut on = *self.autostart.get_or_insert_with(crate::autostart::is_enabled);
             if ui
@@ -1154,6 +1210,9 @@ impl App {
             }
 
             ui.separator();
+            self.updates_section(ui);
+
+            ui.separator();
             ui.heading("Support");
             ui.horizontal_wrapped(|ui| {
                 if ui.button("📋 Copy diagnostics").on_hover_text("Version, OS, devices, settings and recent events, for bug reports").clicked() {
@@ -1200,13 +1259,128 @@ impl App {
         }
     }
 
-    fn log_panel(&self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            if self.view.events.is_empty() {
-                ui.label(RichText::new("No events yet").color(MUTED_TEXT));
+    fn update_state(&self) -> UpdateState {
+        self.update.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Run `job` on a background thread; it reports through `self.update`.
+    fn update_job(&self, ctx: &egui::Context, job: impl FnOnce(&dyn Fn(UpdateState)) + Send + 'static) {
+        let (state, ctx) = (self.update.clone(), ctx.clone());
+        let _ = std::thread::Builder::new().name("updater".into()).spawn(move || {
+            let set = |s: UpdateState| {
+                *state.lock().unwrap_or_else(|e| e.into_inner()) = s;
+                ctx.request_repaint();
+            };
+            job(&set);
+        });
+    }
+
+    fn updates_section(&mut self, ui: &mut egui::Ui) {
+        use crate::updater;
+        ui.horizontal(|ui| {
+            ui.heading("Updates");
+            self.help_button(ui, "updates");
+        });
+        let state = self.update_state();
+        let busy = matches!(state, UpdateState::Checking | UpdateState::Downloading { .. } | UpdateState::Installed(_));
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("You have version {}.", env!("CARGO_PKG_VERSION")));
+            if ui
+                .add_enabled(!busy, egui::Button::new("Check for updates"))
+                .on_hover_text("Asks GitHub for the latest release. Nothing is sent about you or your devices.")
+                .clicked()
+            {
+                *self.update.lock().unwrap_or_else(|e| e.into_inner()) = UpdateState::Checking;
+                self.update_job(ui.ctx(), |set| {
+                    set(match updater::check() {
+                        Ok(Some(r)) => UpdateState::Available(r),
+                        Ok(None) => UpdateState::UpToDate,
+                        Err(e) => UpdateState::Failed(format!("{e:#}")),
+                    })
+                });
             }
+        });
+        match &state {
+            UpdateState::Idle => {}
+            UpdateState::Checking => {
+                ui.label(RichText::new("Checking…").color(MUTED_TEXT));
+            }
+            UpdateState::UpToDate => {
+                ui.label(RichText::new("✔ You have the latest version.").color(GREEN));
+            }
+            UpdateState::Available(r) => {
+                ui.label(
+                    RichText::new(format!("Version {} is available ({:.0} MB).", r.version, r.size as f64 / 1e6))
+                        .strong()
+                        .color(GREEN),
+                );
+                if !self.view.recordings.is_empty() {
+                    ui.label(
+                        RichText::new("Updating restarts the app: running recordings are stopped and saved first.")
+                            .small()
+                            .color(YELLOW),
+                    );
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("⬆ Update and restart").clicked() {
+                        let release = r.clone();
+                        self.update_job(ui.ctx(), move |set| {
+                            set(UpdateState::Downloading { done: 0, total: release.size });
+                            let progress = |done, total| set(UpdateState::Downloading { done, total });
+                            set(match updater::install(&release, &progress) {
+                                Ok(i) => UpdateState::Installed(Arc::new(i)),
+                                Err(e) => UpdateState::Failed(format!("{e:#}")),
+                            });
+                        });
+                    }
+                    ui.hyperlink_to("What's new", &r.page_url);
+                });
+            }
+            UpdateState::Downloading { done, total } => {
+                let frac = if *total > 0 { *done as f32 / *total as f32 } else { 0.0 };
+                ui.add(egui::ProgressBar::new(frac).show_percentage().text("Downloading…"));
+            }
+            UpdateState::Installed(i) => {
+                ui.label(RichText::new(format!("Installed {}. Restarting…", i.version)).color(GREEN));
+            }
+            UpdateState::Failed(e) => {
+                ui.label(RichText::new(format!("⚠ {e}")).small().color(YELLOW));
+                ui.hyperlink_to("Download it from the release page instead", updater::RELEASES_PAGE);
+            }
+        }
+    }
+
+    /// After an update was installed: start the new version and quit this one.
+    fn restart_after_update(&mut self, ctx: &egui::Context) {
+        let UpdateState::Installed(installed) = self.update_state() else { return };
+        if self.quitting {
+            return;
+        }
+        match crate::updater::relaunch(&installed) {
+            Ok(()) => {
+                self.quitting = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Err(e) => {
+                *self.update.lock().unwrap_or_else(|e| e.into_inner()) = UpdateState::Failed(format!(
+                    "Version {} is installed, but restarting failed ({e:#}). Quit and start the app again.",
+                    installed.version
+                ));
+            }
+        }
+    }
+
+    fn log_panel(&self, ui: &mut egui::Ui) {
+        if self.view.events.is_empty() {
+            ui.label(RichText::new("No events yet").color(MUTED_TEXT));
+        }
+        let row_height = ui.text_style_height(&egui::TextStyle::Body).max(ui.spacing().interact_size.y);
+        let n = self.view.events.len();
+        // Only the visible rows are laid out.
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_height, n, |ui, rows| {
             let now = SystemTime::now();
-            for e in &self.view.events {
+            for e in &self.view.events[rows] {
                 let color = match e.kind {
                     EventKind::Info => ui.visuals().text_color(),
                     EventKind::Action => BLUE,
@@ -1214,8 +1388,9 @@ impl App {
                     EventKind::Error => RED,
                 };
                 ui.horizontal(|ui| {
+                    ui.set_height(row_height);
                     ui.label(RichText::new(ago(now, e.at)).monospace().small().color(MUTED_TEXT));
-                    ui.label(RichText::new(&e.text).color(color));
+                    ui.add(egui::Label::new(RichText::new(&e.text).color(color)).truncate()).on_hover_text(&e.text);
                 });
             }
         });
@@ -1298,6 +1473,15 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             self.hidden = true;
         }
+        let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        let visible = !(self.hidden || minimized);
+        if self.sent_visible != Some(visible) {
+            self.sent_visible = Some(visible);
+            self.service.send(Request::UiVisible(visible));
+        }
+        self.restart_after_update(ctx);
+        // Here rather than in `ui`, so changes made from the tray while hidden are saved too.
+        self.save_settings_if_needed(false);
         if self.hidden {
             // Keep polling hotkeys/tray and refreshing the menu while hidden.
             ctx.request_repaint_after(Duration::from_millis(500));
@@ -1374,7 +1558,6 @@ impl eframe::App for App {
             };
             self.splash.show(&ctx, &status, ready);
         }
-        self.save_settings_if_needed();
         self.frame_count += 1;
         self.screenshot_step(&ctx);
         // Adaptive frame rate. Redrawing is what costs CPU (the audio work runs on
@@ -1384,14 +1567,14 @@ impl eframe::App for App {
             let v = i.viewport();
             (v.focused.unwrap_or(true), v.minimized.unwrap_or(false), v.occluded.unwrap_or(false))
         });
-        if let Some(ms) = repaint_interval_ms(focused, minimized || occluded || self.hidden, !self.meters.is_empty()) {
+        if let Some(ms) = repaint_interval_ms(focused, minimized || occluded || self.hidden, self.animating()) {
             ctx.request_repaint_after(Duration::from_millis(ms));
         }
     }
 
     fn on_exit(&mut self) {
         self.dragging = None;
-        self.save_settings_if_needed();
+        self.save_settings_if_needed(true);
     }
 }
 
@@ -1462,16 +1645,16 @@ fn low_power_wgpu() -> eframe::egui_wgpu::WgpuConfiguration {
 }
 
 /// How often to redraw (ms), or `None` to only redraw on events.
-/// Focused with live meters: 30 fps. In the background (e.g. watching meters
-/// during a call): 5 fps. Nothing animating: 2 fps. Not visible: no redraws
+/// Focused with moving meters: 25 fps. In the background (e.g. watching meters
+/// during a call): 5 fps. Nothing moving: 2 fps. Not visible: no redraws
 /// (tray, hotkeys and the service keep working; they wake the UI when needed).
-fn repaint_interval_ms(focused: bool, not_visible: bool, meters: bool) -> Option<u64> {
+fn repaint_interval_ms(focused: bool, not_visible: bool, animating: bool) -> Option<u64> {
     if not_visible {
         None
-    } else if !meters {
+    } else if !animating {
         Some(500)
     } else if focused {
-        Some(33)
+        Some(40)
     } else {
         Some(200)
     }
@@ -1618,5 +1801,17 @@ fn ago(now: SystemTime, at: SystemTime) -> String {
         5..=59 => format!("{s}s ago"),
         60..=3599 => format!("{}m ago", s / 60),
         _ => format!("{}h ago", s / 3600),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn redraws_slowly_unless_something_moves() {
+        use super::repaint_interval_ms as r;
+        assert_eq!(r(true, true, true), None, "not visible: only on events");
+        assert_eq!(r(true, false, false), Some(500), "silence: 2 fps even when focused");
+        assert_eq!(r(true, false, true), Some(40));
+        assert_eq!(r(false, false, true), Some(200));
     }
 }

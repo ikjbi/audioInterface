@@ -35,6 +35,7 @@ pub struct Desktop {
     hotkeys: Option<GlobalHotKeyManager>,
     registered: Vec<(HotKey, Command)>,
     hotkey_config: (String, String, String),
+    hotkeys_applied: bool,
     pub hotkey_errors: Vec<String>,
     #[cfg(not(target_os = "linux"))]
     tray: Option<tray::Tray>,
@@ -56,6 +57,7 @@ impl Desktop {
             hotkeys,
             registered: Vec::new(),
             hotkey_config: Default::default(),
+            hotkeys_applied: false,
             hotkey_errors: Vec::new(),
             #[cfg(not(target_os = "linux"))]
             tray: None,
@@ -81,9 +83,12 @@ impl Desktop {
     pub fn update_hotkeys(&mut self, settings: &Settings) {
         let config =
             (settings.hotkey_mute_mic.clone(), settings.hotkey_next_output.clone(), settings.hotkey_next_input.clone());
-        if config == self.hotkey_config && !self.registered.is_empty() {
+        // Only when the settings changed: if registering failed (or all hotkeys are
+        // empty), retrying every frame would just repeat the failure.
+        if self.hotkeys_applied && config == self.hotkey_config {
             return;
         }
+        self.hotkeys_applied = true;
         self.hotkey_config = config.clone();
         self.hotkey_errors.clear();
         let Some(mgr) = &self.hotkeys else { return };

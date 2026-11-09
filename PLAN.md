@@ -116,6 +116,19 @@ pavucontrol (Linux). Ordered by value. Platform limits are noted where an OS has
 - [x] 11.20 Diagnostics bundle: copy system/device info + recent log for bug reports
 - [x] 11.21 Settings import/export
 
+## Phase 12: Efficiency and in-app updates (v0.1.3)
+
+From the code review in `.code-review/REVIEW_LOG.md` (findings F-0001…F-0012), after a
+report of loud fans on Windows.
+- [x] 12.1 Redraw fast only while a meter is moving; otherwise 2 fps (F-0001)
+- [x] 12.2 Close the automatic mic meter while the window is hidden or minimized (F-0002)
+- [x] 12.3 Windows: cache endpoint COM objects, one session pass per refresh (F-0003)
+- [x] 12.4 Rate-limit refreshes forced by requests, e.g. slider drags (F-0004)
+- [x] 12.5 Session chart: at most one bar per pixel (F-0005)
+- [x] 12.6 Hotkeys: no re-registering every frame (F-0006)
+- [x] 12.7 Smaller per-frame costs: snapshot copy, noise floor, log rows, caches, settings saves (F-0007…F-0012)
+- [x] 12.8 "Check for updates" button: download the latest release and replace the installed app
+
 ---
 
 ## Progress log
@@ -172,3 +185,9 @@ pavucontrol (Linux). Ordered by value. Platform limits are noted where an OS has
     predicted); balance 80/40; `parecord` detected as in use; per-app volume and mute applied
   - A manual `Linux audio debug` workflow (`.github/workflows/linux-debug.yml`) was added for
     fast audio investigations.
+- **Later** Code review of the hot paths after a report of loud fans on Windows (12 findings,
+  `.code-review/`). Measured on macOS with mock devices: 13% CPU focused before. Found that on
+  Windows the UI never slowed down, because native output meters always counted as "live", and
+  that the mic stayed open while hidden. Fixed all 12 findings. Added "Check for updates", verified
+  end to end on the Mac: a bundle pretending to be 0.0.1 replaced itself with the published
+  universal 0.1.2 and its signature stayed valid. CI now runs the same install on all three OSes.

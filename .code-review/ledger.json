@@ -1,0 +1,692 @@
+{
+  "created_at": "2026-11-09T14:23:04+00:00",
+  "files": {
+    "src/backend/windows.rs": {
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "dirty": true,
+      "focus": [
+        "performance",
+        "bugs"
+      ],
+      "functions": [
+        {
+          "name": "Endpoint::read",
+          "note": ""
+        },
+        {
+          "name": "Endpoint::scan_sessions",
+          "note": ""
+        },
+        {
+          "name": "all_sessions",
+          "note": ""
+        },
+        {
+          "name": "app_streams",
+          "note": "second full session enumeration"
+        },
+        {
+          "name": "devices",
+          "note": "per-endpoint Activate x2 + session enum every 500 ms"
+        },
+        {
+          "name": "endpoint_volume",
+          "note": ""
+        },
+        {
+          "name": "find_session_volume",
+          "note": ""
+        },
+        {
+          "name": "is_active",
+          "note": ""
+        },
+        {
+          "name": "mix_format",
+          "note": ""
+        },
+        {
+          "name": "native_peak",
+          "note": ""
+        },
+        {
+          "name": "set_balance",
+          "note": ""
+        },
+        {
+          "name": "set_mute",
+          "note": ""
+        },
+        {
+          "name": "set_roles",
+          "note": ""
+        },
+        {
+          "name": "set_volume",
+          "note": ""
+        }
+      ],
+      "hash": "31de7547504dd563af0f7ab0bf9c2fd4f24d19c8",
+      "mode": "diff",
+      "review_count": 2,
+      "reviewed_at": "2026-11-09T16:07:08+00:00",
+      "summary": "Endpoint cache (COM objects + properties, 10 s TTL, invalidated on errors); one session pass builds in_use_by and app streams; cheap is_active check for set_roles."
+    },
+    "src/desktop.rs": {
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "dirty": true,
+      "focus": [
+        "performance",
+        "bugs"
+      ],
+      "functions": [
+        {
+          "name": "Tray::update",
+          "note": ""
+        },
+        {
+          "name": "TrayState::build",
+          "note": ""
+        },
+        {
+          "name": "poll",
+          "note": ""
+        },
+        {
+          "name": "update_hotkeys",
+          "note": "re-registers every frame if registered is empty"
+        }
+      ],
+      "hash": "61c2d36cb47b3f4df42f8cba216192035e27cd1d",
+      "mode": "diff",
+      "review_count": 2,
+      "reviewed_at": "2026-11-09T16:07:08+00:00",
+      "summary": "Hotkeys re-registered only when the settings change."
+    },
+    "src/gui.rs": {
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "dirty": true,
+      "focus": [
+        "performance",
+        "bugs"
+      ],
+      "functions": [
+        {
+          "name": "animating",
+          "note": ""
+        },
+        {
+          "name": "device_card",
+          "note": ""
+        },
+        {
+          "name": "device_section",
+          "note": ""
+        },
+        {
+          "name": "draw_meter",
+          "note": ""
+        },
+        {
+          "name": "handle_desktop_command",
+          "note": ""
+        },
+        {
+          "name": "help_window",
+          "note": ""
+        },
+        {
+          "name": "log_panel",
+          "note": "lays out all rows"
+        },
+        {
+          "name": "logic",
+          "note": ""
+        },
+        {
+          "name": "low_power_wgpu",
+          "note": ""
+        },
+        {
+          "name": "meter_row",
+          "note": "noise_floor recomputed ~5x; spectrum decay per frame"
+        },
+        {
+          "name": "profiles_menu",
+          "note": ""
+        },
+        {
+          "name": "pull",
+          "note": "deep-clones snapshot every frame"
+        },
+        {
+          "name": "repaint_interval_ms",
+          "note": ""
+        },
+        {
+          "name": "restart_after_update",
+          "note": ""
+        },
+        {
+          "name": "save_settings_if_needed",
+          "note": ""
+        },
+        {
+          "name": "settings_window",
+          "note": ""
+        },
+        {
+          "name": "ui",
+          "note": ""
+        },
+        {
+          "name": "update_job",
+          "note": ""
+        },
+        {
+          "name": "updates_section",
+          "note": ""
+        }
+      ],
+      "hash": "9d66f12c7cf1480b2b630db70fc597fec88ace17",
+      "mode": "diff",
+      "review_count": 2,
+      "reviewed_at": "2026-11-09T16:07:08+00:00",
+      "summary": "animating()-based repaint, visibility sent to service, view rebuilt only on snapshot change, once-per-frame noise floor, dt spectrum decay, show_rows log, debounced settings saves, updates section and restart."
+    },
+    "src/gui_recordings.rs": {
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "dirty": true,
+      "focus": [
+        "performance",
+        "bugs"
+      ],
+      "functions": [
+        {
+          "name": "RecordingsPanel::show",
+          "note": ""
+        },
+        {
+          "name": "active_section",
+          "note": ""
+        },
+        {
+          "name": "history_section",
+          "note": ""
+        },
+        {
+          "name": "open_path",
+          "note": ""
+        },
+        {
+          "name": "session_chart",
+          "note": "O(seconds) shapes per frame"
+        }
+      ],
+      "hash": "941084350af2815c2dd4b58fced9712a3fd5a8e4",
+      "mode": "diff",
+      "review_count": 2,
+      "reviewed_at": "2026-11-09T16:07:08+00:00",
+      "summary": "Chart bars per pixel column, gain line only at changes, cache keeps only the selected session."
+    },
+    "src/levels.rs": {
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "dirty": false,
+      "focus": [
+        "performance",
+        "bugs"
+      ],
+      "functions": [
+        {
+          "name": "KWeighting::block_energy",
+          "note": ""
+        },
+        {
+          "name": "LevelCell::push",
+          "note": ""
+        },
+        {
+          "name": "LevelCell::take_for",
+          "note": ""
+        },
+        {
+          "name": "LevelHistory::noise_floor",
+          "note": ""
+        },
+        {
+          "name": "LevelHistory::typical_level",
+          "note": ""
+        },
+        {
+          "name": "Loudness::push",
+          "note": ""
+        },
+        {
+          "name": "MeterState::update",
+          "note": ""
+        },
+        {
+          "name": "SampleWindow::push_interleaved",
+          "note": ""
+        },
+        {
+          "name": "display_floor",
+          "note": ""
+        },
+        {
+          "name": "speech_gate",
+          "note": ""
+        }
+      ],
+      "hash": "73c65d0316797edce793541daf70fc4a25b56b51",
+      "mode": "full",
+      "review_count": 1,
+      "reviewed_at": "2026-11-09T14:23:04+00:00",
+      "summary": "Lock-free LevelCell, K-weighting, ballistics, history. Correct; noise_floor allocates+sorts on each call."
+    },
+    "src/meter.rs": {
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "dirty": false,
+      "focus": [
+        "performance",
+        "bugs"
+      ],
+      "functions": [
+        {
+          "name": "AudioTap::feed",
+          "note": ""
+        },
+        {
+          "name": "MeterEngine::sync",
+          "note": ""
+        },
+        {
+          "name": "build",
+          "note": ""
+        },
+        {
+          "name": "collect_opened",
+          "note": ""
+        },
+        {
+          "name": "find_device",
+          "note": ""
+        },
+        {
+          "name": "open",
+          "note": ""
+        },
+        {
+          "name": "spawn_open",
+          "note": ""
+        }
+      ],
+      "hash": "7bd3231d4603ef8ad8f0ada38f2109211331a476",
+      "mode": "full",
+      "review_count": 1,
+      "reviewed_at": "2026-11-09T14:23:04+00:00",
+      "summary": "cpal capture streams opened off-thread; realtime callback is allocation-free and light. No issues."
+    },
+    "src/service.rs": {
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "dirty": true,
+      "focus": [
+        "performance",
+        "bugs"
+      ],
+      "functions": [
+        {
+          "name": "apply_profile",
+          "note": ""
+        },
+        {
+          "name": "apply_rules",
+          "note": ""
+        },
+        {
+          "name": "auto_record",
+          "note": ""
+        },
+        {
+          "name": "display_paused",
+          "note": ""
+        },
+        {
+          "name": "ensure_backend",
+          "note": ""
+        },
+        {
+          "name": "handle",
+          "note": ""
+        },
+        {
+          "name": "log_changes",
+          "note": ""
+        },
+        {
+          "name": "notify",
+          "note": ""
+        },
+        {
+          "name": "poll_native_meters",
+          "note": ""
+        },
+        {
+          "name": "refresh",
+          "note": ""
+        },
+        {
+          "name": "run",
+          "note": "forced refresh per request batch"
+        },
+        {
+          "name": "start_recording",
+          "note": ""
+        },
+        {
+          "name": "stop_recording",
+          "note": ""
+        },
+        {
+          "name": "sync_meters",
+          "note": "auto meter regardless of UI visibility"
+        },
+        {
+          "name": "tick_recorders",
+          "note": ""
+        }
+      ],
+      "hash": "9957e1e1e242ff82e5b2e9c33204872311c87060",
+      "mode": "diff",
+      "review_count": 2,
+      "reviewed_at": "2026-11-09T16:07:08+00:00",
+      "summary": "Forced refreshes spaced >=150 ms; UiVisible pauses display-only meters and native polling after 10 s hidden; test added."
+    },
+    "src/updater.rs": {
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "dirty": true,
+      "focus": [
+        "performance",
+        "bugs"
+      ],
+      "functions": [
+        {
+          "name": "check",
+          "note": ""
+        },
+        {
+          "name": "cleanup",
+          "note": ""
+        },
+        {
+          "name": "install",
+          "note": ""
+        },
+        {
+          "name": "install_target",
+          "note": ""
+        },
+        {
+          "name": "is_newer",
+          "note": ""
+        },
+        {
+          "name": "parse_latest",
+          "note": ""
+        },
+        {
+          "name": "relaunch",
+          "note": ""
+        },
+        {
+          "name": "swap",
+          "note": ""
+        },
+        {
+          "name": "unpack",
+          "note": ""
+        }
+      ],
+      "hash": "5406330add90a1619fdcd317f8456146133bd876",
+      "mode": "full",
+      "review_count": 1,
+      "reviewed_at": "2026-11-09T16:07:08+00:00",
+      "summary": "GitHub latest-release check, download (ureq/native TLS on Windows+macOS, curl/wget on Linux), extract, same-folder swap with rollback, relaunch. Verified end to end on macOS."
+    }
+  },
+  "findings": [
+    {
+      "category": "performance",
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "created_at": "2026-11-09T14:23:04+00:00",
+      "detail": "repaint_interval_ms gets meters = !self.meters.is_empty(). On Windows every output has a native meter, so meters is never empty and the UI redraws at 30 fps whenever focused and 5 fps whenever visible, even when nothing is playing and no mic is metered. Measured on macOS with 6 mock devices: ~13% CPU focused vs ~3% unfocused; Windows/DX12 laptops are likely worse, plus DWM/GPU work outside the process.",
+      "file": "src/gui.rs",
+      "function": "ui",
+      "id": "F-0001",
+      "line": 1387,
+      "note": "fixed for v0.1.3",
+      "resolved_at": "2026-11-09T16:06:51+00:00",
+      "severity": "medium",
+      "status": "fixed",
+      "suggestion": "Only animate fast while a meter is actually moving (any level above the floor or decaying, any capture meter, spectrum open); otherwise 2 fps. Optionally cap meters at ~20 fps.",
+      "title": "Window never drops below 30 fps on Windows while focused (5 fps unfocused), even in silence",
+      "updated_at": "2026-11-09T16:06:51+00:00"
+    },
+    {
+      "category": "performance",
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "created_at": "2026-11-09T14:23:04+00:00",
+      "detail": "The automatic default-input meter runs 24/7, including when the app is in the tray and nobody looks. On Windows that keeps the mic in use (privacy indicator) and keeps audiodg.exe running the whole capture effects chain (e.g. vendor noise suppression / Sonar for headsets like the Nova 7), which can cost noticeable CPU outside our process.",
+      "file": "src/service.rs",
+      "function": "sync_meters",
+      "id": "F-0002",
+      "line": 707,
+      "note": "fixed for v0.1.3",
+      "resolved_at": "2026-11-09T16:06:51+00:00",
+      "severity": "medium",
+      "status": "fixed",
+      "suggestion": "Tell the service when the UI is not visible and drop the automatic meter then (keep it for recordings / explicitly monitored devices).",
+      "title": "Default-input capture stream stays open while the window is hidden/minimized",
+      "updated_at": "2026-11-09T16:06:51+00:00"
+    },
+    {
+      "category": "performance",
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "created_at": "2026-11-09T14:23:04+00:00",
+      "detail": "devices() calls OpenPropertyStore, Activate(IAudioEndpointVolume) and Activate(IAudioSessionManager2)+session enumeration for every endpoint, then app_streams() enumerates every endpoint's sessions again. These are cross-process calls into the Windows audio service; with 10+ endpoints this is a steady background cost (also in svchost/audiosrv), and it runs again after every request.",
+      "file": "src/backend/windows.rs",
+      "function": "devices",
+      "id": "F-0003",
+      "line": 343,
+      "note": "fixed for v0.1.3",
+      "resolved_at": "2026-11-09T16:06:51+00:00",
+      "severity": "medium",
+      "status": "fixed",
+      "suggestion": "Cache IMMDevice/IAudioEndpointVolume/IAudioSessionManager2 per endpoint id (invalidate when the endpoint list changes), read static properties (name, transport, form factor) once per endpoint, and build in_use_by and app_streams from a single session pass.",
+      "title": "Each 500 ms refresh activates COM objects per endpoint and enumerates all sessions twice",
+      "updated_at": "2026-11-09T16:06:51+00:00"
+    },
+    {
+      "category": "performance",
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "created_at": "2026-11-09T14:23:04+00:00",
+      "detail": "force = true after handling any request, so a volume-slider drag (one SetVolume per frame) triggers a full backend devices() + app_streams() on almost every 30 ms tick instead of every 500 ms.",
+      "file": "src/service.rs",
+      "function": "run",
+      "id": "F-0004",
+      "line": 275,
+      "note": "fixed for v0.1.3",
+      "resolved_at": "2026-11-09T16:06:51+00:00",
+      "severity": "medium",
+      "status": "fixed",
+      "suggestion": "Rate-limit forced refreshes (e.g. at most every 100-150 ms) or only force for structural requests (SetDefault, profiles, card profile), and patch volume/mute into the cached device list directly.",
+      "title": "Every request batch forces a full device refresh, so dragging a slider re-enumerates devices ~30x/s",
+      "updated_at": "2026-11-09T16:06:51+00:00"
+    },
+    {
+      "category": "performance",
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "created_at": "2026-11-09T14:23:04+00:00",
+      "detail": "With the Recordings window open on an 8-hour session the chart tessellates ~28,800 bars plus a ~57,600-point gain line at up to 30 fps.",
+      "file": "src/gui_recordings.rs",
+      "function": "session_chart",
+      "id": "F-0005",
+      "line": 325,
+      "note": "fixed for v0.1.3",
+      "resolved_at": "2026-11-09T16:06:51+00:00",
+      "severity": "medium",
+      "status": "fixed",
+      "suggestion": "Downsample to at most one bar per horizontal pixel (max RMS per pixel column) and cache the result per file/width.",
+      "title": "Session chart draws one rectangle per logged second every frame",
+      "updated_at": "2026-11-09T16:06:51+00:00"
+    },
+    {
+      "category": "bug",
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "created_at": "2026-11-09T14:23:04+00:00",
+      "detail": "The early return requires !self.registered.is_empty(). If all hotkeys are empty or all fail to register (e.g. taken by another app), every frame unregisters/registers again and clears hotkey_errors, so errors flicker and RegisterHotKey is called 30x/s.",
+      "file": "src/desktop.rs",
+      "function": "update_hotkeys",
+      "id": "F-0006",
+      "line": 84,
+      "note": "fixed for v0.1.3",
+      "resolved_at": "2026-11-09T16:06:51+00:00",
+      "severity": "low",
+      "status": "fixed",
+      "suggestion": "Return early when config == self.hotkey_config regardless of registered; force a retry only when settings change.",
+      "title": "Hotkeys are re-registered every frame when none could be registered",
+      "updated_at": "2026-11-09T16:06:51+00:00"
+    },
+    {
+      "category": "performance",
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "created_at": "2026-11-09T14:23:04+00:00",
+      "detail": "View clones devices, 100 events, app streams, rates/profiles maps, all active recordings (600 Samples with 4 Strings each) and up to 20 finished reports per frame: tens of thousands of allocations per second during a recording.",
+      "file": "src/gui.rs",
+      "function": "pull",
+      "id": "F-0007",
+      "line": 206,
+      "note": "fixed for v0.1.3",
+      "resolved_at": "2026-11-09T16:06:52+00:00",
+      "severity": "low",
+      "status": "fixed",
+      "suggestion": "Only rebuild the View when snapshot.generation / total_events changes, or share via Arc.",
+      "title": "Whole snapshot is deep-cloned every frame",
+      "updated_at": "2026-11-09T16:06:52+00:00"
+    },
+    {
+      "category": "performance",
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "created_at": "2026-11-09T14:23:04+00:00",
+      "detail": "meter_row calls noise_floor at lines 824, 878, 883 (directly and via snr) and 916, each collecting and sorting up to 150 floats.",
+      "file": "src/gui.rs",
+      "function": "meter_row",
+      "id": "F-0008",
+      "line": 824,
+      "note": "fixed for v0.1.3",
+      "resolved_at": "2026-11-09T16:06:52+00:00",
+      "severity": "low",
+      "status": "fixed",
+      "suggestion": "Compute noise floor, gate and typical level once per meter_row (or cache in LevelHistory when a bucket completes).",
+      "title": "noise_floor() (allocate + sort) is recomputed ~5 times per input per frame",
+      "updated_at": "2026-11-09T16:06:52+00:00"
+    },
+    {
+      "category": "bug",
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "created_at": "2026-11-09T14:23:04+00:00",
+      "detail": "Bands decay by a fixed 1 dB per frame: 30 dB/s at 30 fps but only 5 dB/s at the 5 fps background rate, so the analyzer looks sluggish when unfocused.",
+      "file": "src/gui.rs",
+      "function": "meter_row",
+      "id": "F-0009",
+      "line": 867,
+      "note": "fixed for v0.1.3",
+      "resolved_at": "2026-11-09T16:06:52+00:00",
+      "severity": "low",
+      "status": "fixed",
+      "suggestion": "Decay by 30 dB/s * dt.",
+      "title": "Spectrum release rate depends on frame rate",
+      "updated_at": "2026-11-09T16:06:52+00:00"
+    },
+    {
+      "category": "performance",
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "created_at": "2026-11-09T14:23:04+00:00",
+      "detail": "No ScrollArea::show_rows, so all rows (2 labels each) are laid out even when only a few are visible.",
+      "file": "src/gui.rs",
+      "function": "log_panel",
+      "id": "F-0010",
+      "line": 1203,
+      "note": "fixed for v0.1.3",
+      "resolved_at": "2026-11-09T16:06:52+00:00",
+      "severity": "low",
+      "status": "fixed",
+      "suggestion": "Use show_rows with a fixed row height.",
+      "title": "Event log lays out all 100 rows every frame",
+      "updated_at": "2026-11-09T16:06:52+00:00"
+    },
+    {
+      "category": "performance",
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "created_at": "2026-11-09T14:23:04+00:00",
+      "detail": "Every recording the user selects stays in memory (all rows + report) until the app exits; browsing many long sessions grows memory without bound.",
+      "file": "src/gui_recordings.rs",
+      "function": "RecordingsPanel::show",
+      "id": "F-0011",
+      "line": 25,
+      "note": "fixed for v0.1.3",
+      "resolved_at": "2026-11-09T16:06:52+00:00",
+      "severity": "low",
+      "status": "fixed",
+      "suggestion": "Keep only the selected session (or a small LRU).",
+      "title": "Loaded-session cache never shrinks",
+      "updated_at": "2026-11-09T16:06:52+00:00"
+    },
+    {
+      "category": "performance",
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "created_at": "2026-11-09T14:23:04+00:00",
+      "detail": "save_settings_if_needed only defers while a volume slider is dragged; other sliders save on every changed frame.",
+      "file": "src/gui.rs",
+      "function": "settings_window",
+      "id": "F-0012",
+      "line": 1084,
+      "note": "fixed for v0.1.3",
+      "resolved_at": "2026-11-09T16:06:52+00:00",
+      "severity": "low",
+      "status": "fixed",
+      "suggestion": "Debounce saves (e.g. 1 s after the last change).",
+      "title": "Dragging the meter-floor slider writes settings.json every frame",
+      "updated_at": "2026-11-09T16:06:52+00:00"
+    }
+  ],
+  "project": "audioInterface",
+  "schema": 1,
+  "sessions": [
+    {
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "date": "2026-11-09T14:23:04+00:00",
+      "files_reviewed": 7,
+      "findings_added": 12,
+      "findings_updated": 0,
+      "focus": [
+        "performance",
+        "bugs"
+      ],
+      "scope": "whole project, batch 1: hot paths (service, GUI, metering, Windows backend)"
+    },
+    {
+      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "date": "2026-11-09T16:07:08+00:00",
+      "files_reviewed": 6,
+      "findings_added": 0,
+      "findings_updated": 0,
+      "focus": [
+        "performance",
+        "bugs"
+      ],
+      "scope": "fixes for F-0001..F-0012 and the new updater (v0.1.3)"
+    }
+  ],
+  "updated_at": "2026-11-09T16:07:08+00:00"
+}

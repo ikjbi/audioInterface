@@ -12,6 +12,7 @@ administrator / root rights**, unless a section says otherwise.
   - [Portable tar.gz (recommended, no sudo)](#portable-targz-recommended-no-sudo)
   - [Build from source without sudo](#build-from-source-on-linux-without-sudo)
 - [macOS](#macos)
+- [Updating](#updating)
 - [Corporate / locked-down machines](#corporate--locked-down-machines)
 
 Pre-built downloads are attached to each
@@ -188,6 +189,18 @@ scripts/bundle-macos.sh target/release/audio-interface 0.1.0 dist   # makes "Aud
 Drag `dist/Audio Interface.app` to `~/Applications` (your own Applications folder, no admin).
 The bundle is signed ad hoc, so the first launch needs **right-click → Open**. Allow
 microphone access when asked. It's needed for meters and recordings.
+
+---
+
+## Updating
+
+Open **Settings → Updates → Check for updates**. If there's a newer version, **Update and
+restart** downloads it, replaces the app where it is installed (your folder, `~/.local/bin`, or
+*Audio Interface.app*) and starts it again. Settings, profiles and recordings are kept. No admin
+rights are needed as long as you can write to that folder. From a terminal:
+`audio-interface update` (or `update --check`).
+
+You can also update by hand: download the new file and replace the old one.
 
 ---
 

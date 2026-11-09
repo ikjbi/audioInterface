@@ -13,6 +13,7 @@ use crate::model::{AppStream, Device, Direction, Transport};
 use anyhow::{Context, Result, anyhow};
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::time::{Duration, Instant};
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Foundation::S_OK;
@@ -75,8 +76,99 @@ fn flow(direction: Direction) -> EDataFlow {
 pub struct WasapiBackend {
     enumerator: IMMDeviceEnumerator,
     meters: HashMap<(String, Direction), IAudioMeterInformation>,
-    /// Shared-mode mix format per endpoint (rate, channels), refreshed every 10 s.
-    formats: HashMap<String, (std::time::Instant, Option<(u32, u16)>)>,
+    /// Per-endpoint COM objects and properties, kept between refreshes. Every
+    /// `Activate` is a call into the Windows audio service, so redoing them
+    /// twice a second for every endpoint costs CPU there and here.
+    endpoints: HashMap<String, Endpoint>,
+    /// App streams found during the last `devices()` pass, and when.
+    streams: Option<(Instant, Vec<AppStream>)>,
+}
+
+/// How long cached endpoint properties (name, transport, format) are trusted.
+const ENDPOINT_TTL: Duration = Duration::from_secs(10);
+
+struct Endpoint {
+    name: String,
+    transport: Transport,
+    hands_free: bool,
+    format: Option<(u32, u16)>,
+    volume: Option<IAudioEndpointVolume>,
+    sessions: Option<IAudioSessionManager2>,
+    /// When the above was read. `None` forces a re-read (e.g. after a COM error).
+    read_at: Option<Instant>,
+}
+
+impl Endpoint {
+    fn read(dev: &IMMDevice, id: &str) -> Self {
+        let store = unsafe { dev.OpenPropertyStore(STGM_READ) }.ok();
+        let name =
+            store.as_ref().and_then(|s| prop_string(s, &PKEY_Device_FriendlyName)).unwrap_or_else(|| id.to_string());
+        let enumerator = store.as_ref().and_then(|s| prop_string(s, &PKEY_DEVICE_ENUMERATOR));
+        let parent = store.as_ref().and_then(|s| prop_string(s, &PKEY_ENDPOINT_PARENT_PATH));
+        let form_factor = store.as_ref().and_then(|s| prop_u32(s, &PKEY_AudioEndpoint_FormFactor));
+        let path = format!("{}|{}", enumerator.unwrap_or_default(), parent.unwrap_or_default());
+        let hints = Hints { name: &name, instance_path: Some(&path), ..Default::default() };
+        let mut transport = bluetooth::guess_transport(&hints);
+        if form_factor == Some(FORM_FACTOR_DISPLAY) && transport != Transport::Bluetooth {
+            transport = if name.to_ascii_lowercase().contains("displayport") {
+                Transport::DisplayPort
+            } else {
+                Transport::Hdmi
+            };
+        }
+        let hands_free = bluetooth::is_hands_free(transport, &hints);
+        Endpoint {
+            transport,
+            hands_free,
+            format: mix_format(dev),
+            volume: unsafe { dev.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) }.ok(),
+            sessions: unsafe { dev.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) }.ok(),
+            read_at: Some(Instant::now()),
+            name,
+        }
+    }
+
+    /// One pass over the endpoint's audio sessions: returns the apps actively
+    /// using it ("in use by") and appends every app stream (for the mixer).
+    fn scan_sessions(&mut self, id: &str, direction: Direction, streams: &mut Vec<AppStream>) -> Vec<String> {
+        let own = std::process::id();
+        let mut users: Vec<String> = Vec::new();
+        let Some(mgr) = &self.sessions else { return users };
+        let Ok(list) = (unsafe { mgr.GetSessionEnumerator() }) else {
+            self.read_at = None;
+            return users;
+        };
+        for i in 0..unsafe { list.GetCount() }.unwrap_or(0) {
+            let Ok(ctl) = (unsafe { list.GetSession(i) }) else { continue };
+            let state = unsafe { ctl.GetState() }.ok();
+            if state == Some(AudioSessionStateExpired) {
+                continue;
+            }
+            let Ok(ctl2) = ctl.cast::<IAudioSessionControl2>() else { continue };
+            if unsafe { ctl2.GetProcessId() }.unwrap_or(0) == own {
+                continue;
+            }
+            let app = session_app_name(&ctl2);
+            let system = unsafe { ctl2.IsSystemSoundsSession() } == S_OK;
+            if state == Some(AudioSessionStateActive) && !system && !users.contains(&app) {
+                users.push(app.clone());
+            }
+            if let Ok(vol) = ctl2.cast::<ISimpleAudioVolume>()
+                && let (Ok(volume), Ok(muted)) = unsafe { (vol.GetMasterVolume(), vol.GetMute()) }
+                && let Some(sid) = session_instance_id(&ctl2)
+            {
+                streams.push(AppStream {
+                    id: sid,
+                    app,
+                    direction,
+                    device_id: id.to_string(),
+                    volume,
+                    muted: muted.as_bool(),
+                });
+            }
+        }
+        users
+    }
 }
 
 /// The endpoint's shared-mode mix format: (sample rate, channels).
@@ -102,7 +194,7 @@ impl WasapiBackend {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             let enumerator: IMMDeviceEnumerator =
                 CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).context("create MMDeviceEnumerator")?;
-            Ok(WasapiBackend { enumerator, meters: HashMap::new(), formats: HashMap::new() })
+            Ok(WasapiBackend { enumerator, meters: HashMap::new(), endpoints: HashMap::new(), streams: None })
         }
     }
 
@@ -119,8 +211,7 @@ impl WasapiBackend {
 
     fn set_roles(&mut self, id: &str, direction: Direction, roles: &[ERole]) -> Result<()> {
         // Make sure it exists (and is the right direction) for a clear error.
-        let exists = self.devices()?.iter().any(|d| d.id == id && d.direction == direction);
-        if !exists {
+        if !self.is_active(id, direction) {
             return Err(anyhow!("no active {direction} device with id {id}"));
         }
         unsafe {
@@ -137,7 +228,21 @@ impl WasapiBackend {
         Ok(())
     }
 
+    /// Whether `id` is an active endpoint of this direction (cheap: ids only).
+    fn is_active(&self, id: &str, direction: Direction) -> bool {
+        let Ok(collection) = (unsafe { self.enumerator.EnumAudioEndpoints(flow(direction), DEVICE_STATE_ACTIVE) })
+        else {
+            return false;
+        };
+        (0..unsafe { collection.GetCount() }.unwrap_or(0)).any(|i| {
+            unsafe { collection.Item(i) }.ok().and_then(|d| unsafe { device_id(&d) }.ok()).as_deref() == Some(id)
+        })
+    }
+
     fn endpoint_volume(&self, id: &str) -> Result<IAudioEndpointVolume> {
+        if let Some(v) = self.endpoints.get(id).and_then(|e| e.volume.clone()) {
+            return Ok(v);
+        }
         let dev = self.device(id)?;
         unsafe { dev.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) }.context("activate IAudioEndpointVolume")
     }
@@ -150,46 +255,6 @@ unsafe fn device_id(dev: &IMMDevice) -> Result<String> {
         CoTaskMemFree(Some(pw.0 as *const c_void));
         Ok(s?)
     }
-}
-
-/// Other processes with an active audio session on this endpoint (e.g. Teams
-/// capturing from the mic during a call). Our own process is excluded.
-fn session_users(dev: &IMMDevice) -> Vec<String> {
-    let own = std::process::id();
-    let mut out: Vec<String> = Vec::new();
-    unsafe {
-        let Ok(mgr) = dev.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) else { return out };
-        let Ok(sessions) = mgr.GetSessionEnumerator() else { return out };
-        for i in 0..sessions.GetCount().unwrap_or(0) {
-            let Ok(ctl) = sessions.GetSession(i) else { continue };
-            if ctl.GetState().ok() != Some(AudioSessionStateActive) {
-                continue;
-            }
-            let Ok(ctl2) = ctl.cast::<IAudioSessionControl2>() else { continue };
-            if ctl2.IsSystemSoundsSession() == S_OK {
-                continue;
-            }
-            let pid = ctl2.GetProcessId().unwrap_or(0);
-            if pid == own {
-                continue;
-            }
-            let raw = ctl2
-                .GetSessionIdentifier()
-                .ok()
-                .and_then(|p| {
-                    let s = p.to_string().ok();
-                    CoTaskMemFree(Some(p.0 as *const c_void));
-                    s
-                })
-                .and_then(|id| crate::model::exe_from_windows_session_id(&id))
-                .unwrap_or_else(|| format!("pid {pid}"));
-            let name = crate::model::friendly_app_name(&raw);
-            if !out.contains(&name) {
-                out.push(name);
-            }
-        }
-    }
-    out
 }
 
 /// Friendly app name for a session.
@@ -282,6 +347,8 @@ impl AudioBackend for WasapiBackend {
 
     fn devices(&mut self) -> Result<Vec<Device>> {
         let mut out = Vec::new();
+        let mut streams = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for direction in Direction::ALL {
             let default = self.default_id(direction, eConsole);
             let comms_default = self.default_id(direction, eCommunications);
@@ -290,30 +357,16 @@ impl AudioBackend for WasapiBackend {
             for i in 0..count {
                 let Ok(dev) = (unsafe { collection.Item(i) }) else { continue };
                 let Ok(id) = (unsafe { device_id(&dev) }) else { continue };
-                let store = unsafe { dev.OpenPropertyStore(STGM_READ) }.ok();
-                let name = store
-                    .as_ref()
-                    .and_then(|s| prop_string(s, &PKEY_Device_FriendlyName))
-                    .unwrap_or_else(|| id.clone());
-                let enumerator = store.as_ref().and_then(|s| prop_string(s, &PKEY_DEVICE_ENUMERATOR));
-                let parent = store.as_ref().and_then(|s| prop_string(s, &PKEY_ENDPOINT_PARENT_PATH));
-                let form_factor = store.as_ref().and_then(|s| prop_u32(s, &PKEY_AudioEndpoint_FormFactor));
-                let path = format!("{}|{}", enumerator.unwrap_or_default(), parent.unwrap_or_default());
-                let hints = Hints { name: &name, instance_path: Some(&path), ..Default::default() };
-                let mut transport = bluetooth::guess_transport(&hints);
-                if form_factor == Some(FORM_FACTOR_DISPLAY) && transport != Transport::Bluetooth {
-                    transport = if name.to_ascii_lowercase().contains("displayport") {
-                        Transport::DisplayPort
-                    } else {
-                        Transport::Hdmi
-                    };
+                seen.insert(id.clone());
+                if self.endpoints.get(&id).is_none_or(|e| e.read_at.is_none_or(|t| t.elapsed() > ENDPOINT_TTL)) {
+                    self.endpoints.insert(id.clone(), Endpoint::read(&dev, &id));
                 }
-                let hands_free = bluetooth::is_hands_free(transport, &hints);
+                let ep = self.endpoints.get_mut(&id).expect("just inserted");
 
-                let ev = unsafe { dev.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) }.ok();
-                let volume = ev.as_ref().and_then(|e| unsafe { e.GetMasterVolumeLevelScalar() }.ok());
-                let muted = ev.as_ref().and_then(|e| unsafe { e.GetMute() }.ok()).map(|b| b.as_bool());
-                let balance = ev.as_ref().and_then(|e| unsafe {
+                let ev = ep.volume.as_ref();
+                let volume = ev.and_then(|e| unsafe { e.GetMasterVolumeLevelScalar() }.ok());
+                let muted = ev.and_then(|e| unsafe { e.GetMute() }.ok()).map(|b| b.as_bool());
+                let balance = ev.and_then(|e| unsafe {
                     if e.GetChannelCount().ok()? < 2 {
                         return None;
                     }
@@ -321,33 +374,30 @@ impl AudioBackend for WasapiBackend {
                     let r = e.GetChannelVolumeLevelScalar(1).ok()?;
                     Some(crate::model::balance_from(l, r))
                 });
-
-                let is_comms_default = comms_default.as_deref() == Some(id.as_str());
-                let fmt = match self.formats.get(&id) {
-                    Some((at, f)) if at.elapsed() < std::time::Duration::from_secs(10) => *f,
-                    _ => {
-                        let f = mix_format(&dev);
-                        self.formats.insert(id.clone(), (std::time::Instant::now(), f));
-                        f
-                    }
-                };
+                if ev.is_some() && volume.is_none() {
+                    // The cached interface went stale (e.g. the audio service restarted).
+                    ep.read_at = None;
+                }
+                let in_use_by = ep.scan_sessions(&id, direction, &mut streams);
                 out.push(Device {
                     is_default: default.as_deref() == Some(id.as_str()),
-                    id,
-                    name,
+                    is_comms_default: comms_default.as_deref() == Some(id.as_str()),
+                    name: ep.name.clone(),
                     direction,
-                    transport,
+                    transport: ep.transport,
                     volume,
                     muted,
-                    hands_free,
-                    in_use_by: session_users(&dev),
-                    is_comms_default,
+                    hands_free: ep.hands_free,
+                    in_use_by,
                     balance,
-                    sample_rate: fmt.map(|f| f.0),
-                    channels: fmt.map(|f| f.1),
+                    sample_rate: ep.format.map(|f| f.0),
+                    channels: ep.format.map(|f| f.1),
+                    id,
                 });
             }
         }
+        self.endpoints.retain(|id, _| seen.contains(id));
+        self.streams = Some((Instant::now(), streams));
         Ok(out)
     }
 
@@ -371,22 +421,12 @@ impl AudioBackend for WasapiBackend {
         Ok(())
     }
 
+    /// Collected during `devices()`, which the service calls right before this.
     fn app_streams(&mut self) -> Vec<AppStream> {
-        self.all_sessions()
-            .into_iter()
-            .filter_map(|(device_id, direction, ctl2)| {
-                let vol = ctl2.cast::<ISimpleAudioVolume>().ok()?;
-                let (volume, muted) = unsafe { (vol.GetMasterVolume().ok()?, vol.GetMute().ok()?.as_bool()) };
-                Some(AppStream {
-                    id: session_instance_id(&ctl2)?,
-                    app: session_app_name(&ctl2),
-                    direction,
-                    device_id,
-                    volume,
-                    muted,
-                })
-            })
-            .collect()
+        if !self.streams.as_ref().is_some_and(|(at, _)| at.elapsed() < Duration::from_secs(1)) {
+            let _ = self.devices();
+        }
+        self.streams.as_ref().map(|(_, s)| s.clone()).unwrap_or_default()
     }
 
     fn set_app_volume(&mut self, stream_id: &str, volume: f32) -> Result<()> {

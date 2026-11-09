@@ -26,6 +26,12 @@ use std::time::{Duration, Instant, SystemTime};
 const TICK: Duration = Duration::from_millis(30);
 const REFRESH_EVERY: Duration = Duration::from_millis(500);
 const RECONNECT_EVERY: Duration = Duration::from_secs(3);
+/// Refreshes triggered by requests (e.g. every frame of a slider drag) are
+/// spaced at least this far apart.
+const MIN_FORCED_REFRESH: Duration = Duration::from_millis(150);
+/// After the window has been hidden or minimized this long, meters nobody can
+/// see are closed (recordings keep theirs).
+const HIDDEN_METER_GRACE: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(10) };
 const MAX_EVENTS: usize = 200;
 
 #[derive(Debug, Clone)]
@@ -51,6 +57,10 @@ pub enum Request {
     /// Start/stop metering a device on user request.
     SetMonitored(DeviceKey, bool),
     UpdateSettings(Settings),
+    /// Whether the window is visible. While it isn't, meters that only feed the
+    /// display are closed: an open mic keeps the OS audio engine (and on
+    /// Windows the device's effects chain) busy for nothing.
+    UiVisible(bool),
     /// Apply a profile: switch defaults, volumes and mutes.
     ApplyProfile(crate::profiles::Profile),
     /// Start logging a device (optionally with audio).
@@ -196,6 +206,8 @@ struct Worker {
     monitored: BTreeSet<DeviceKey>,
     /// Devices whose automatic meter the user hid this session.
     hidden_meters: BTreeSet<DeviceKey>,
+    /// Since when the window has been hidden (`None` while visible).
+    ui_hidden_since: Option<Instant>,
     devices: Vec<Device>,
     have_listed: bool,
     recorders: HashMap<DeviceKey, SessionRecorder>,
@@ -229,6 +241,7 @@ impl Worker {
             locker: GainLocker::default(),
             monitored: BTreeSet::new(),
             hidden_meters: BTreeSet::new(),
+            ui_hidden_since: None,
             devices: Vec::new(),
             have_listed: false,
             recorders: HashMap::new(),
@@ -257,8 +270,8 @@ impl Worker {
 
     fn run(mut self) {
         let mut last_refresh: Option<Instant> = None;
+        let mut force = false;
         loop {
-            let mut force = false;
             match self.rx.recv_timeout(TICK) {
                 Ok(Request::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
                 Ok(req) => {
@@ -276,9 +289,14 @@ impl Worker {
                 }
                 Err(RecvTimeoutError::Timeout) => {}
             }
-            if force || last_refresh.is_none_or(|t| t.elapsed() >= REFRESH_EVERY) {
+            let due = match last_refresh {
+                None => true,
+                Some(t) => t.elapsed() >= if force { MIN_FORCED_REFRESH } else { REFRESH_EVERY },
+            };
+            if due {
                 self.refresh();
                 last_refresh = Some(Instant::now());
+                force = false;
             }
             self.poll_native_meters();
             self.tick_recorders();
@@ -346,6 +364,15 @@ impl Worker {
         match req {
             Request::UpdateSettings(s) => {
                 self.settings = s;
+                return;
+            }
+            Request::UiVisible(visible) => {
+                match (visible, self.ui_hidden_since) {
+                    (true, _) => self.ui_hidden_since = None,
+                    (false, None) => self.ui_hidden_since = Some(Instant::now()),
+                    (false, Some(_)) => {}
+                }
+                self.sync_meters();
                 return;
             }
             Request::SetMonitored(key, on) => {
@@ -693,8 +720,14 @@ impl Worker {
         }
     }
 
+    /// The window has been out of sight long enough to close display-only meters.
+    fn display_paused(&self) -> bool {
+        self.ui_hidden_since.is_some_and(|t| t.elapsed() >= HIDDEN_METER_GRACE)
+    }
+
     fn sync_meters(&mut self) {
-        let backend = self.backend.as_ref().unwrap();
+        let paused = self.display_paused();
+        let Some(backend) = self.backend.as_ref() else { return };
         let mut wanted: HashMap<DeviceKey, String> = HashMap::new();
         let mut native: HashMap<DeviceKey, Arc<LevelCell>> = HashMap::new();
         for d in &self.devices {
@@ -709,7 +742,8 @@ impl Worker {
                 && self.settings.monitor_default_input
                 && (d.transport != Transport::Bluetooth || self.settings.monitor_bluetooth_inputs)
                 && !self.hidden_meters.contains(&key);
-            if (auto || self.monitored.contains(&key) || self.recorders.contains_key(&key))
+            let shown = !paused && (auto || self.monitored.contains(&key));
+            if (shown || self.recorders.contains_key(&key))
                 && let Some(cap) = backend.capture_id(&d.id, d.direction)
             {
                 wanted.insert(key, cap);
@@ -921,8 +955,12 @@ impl Worker {
     }
 
     fn poll_native_meters(&mut self) {
+        let paused = self.display_paused();
         let Some(backend) = self.backend.as_mut() else { return };
         for (key, cell) in &self.native_cells {
+            if paused && !self.recorders.contains_key(key) {
+                continue;
+            }
             if let Some(p) = backend.native_peak(&key.id, key.direction) {
                 cell.push_levels(p, p * std::f32::consts::FRAC_1_SQRT_2);
             }
@@ -977,6 +1015,55 @@ mod tests {
         fn capture_id(&self, _id: &str, _d: Direction) -> Option<String> {
             None
         }
+    }
+
+    /// Mock whose outputs have a native peak meter (like Windows).
+    struct NativeMeterMock(MockBackend);
+    impl AudioBackend for NativeMeterMock {
+        fn api_name(&self) -> &'static str {
+            "Mock"
+        }
+        fn devices(&mut self) -> Result<Vec<Device>> {
+            self.0.devices()
+        }
+        fn set_default(&mut self, id: &str, d: Direction) -> Result<()> {
+            self.0.set_default(id, d)
+        }
+        fn set_volume(&mut self, id: &str, d: Direction, v: f32) -> Result<()> {
+            self.0.set_volume(id, d, v)
+        }
+        fn set_mute(&mut self, id: &str, d: Direction, m: bool) -> Result<()> {
+            self.0.set_mute(id, d, m)
+        }
+        fn capture_id(&self, _id: &str, _d: Direction) -> Option<String> {
+            None
+        }
+        fn has_native_meter(&self, d: Direction) -> bool {
+            d == Direction::Output
+        }
+        fn native_peak(&mut self, _id: &str, _d: Direction) -> Option<f32> {
+            Some(0.5)
+        }
+    }
+
+    #[test]
+    fn meters_pause_while_the_window_is_hidden() {
+        let service = Service::start(
+            Settings::default(),
+            Box::new(|| Ok(Box::new(NativeMeterMock(MockBackend::demo())) as Box<dyn AudioBackend>)),
+        );
+        wait_for(&service, |s| !s.levels.is_empty());
+        let cell = service.snapshot().levels.values().next().unwrap().clone();
+        wait_for(&service, |_| cell.take().peak > 0.0);
+
+        service.send(Request::UiVisible(false));
+        std::thread::sleep(HIDDEN_METER_GRACE + Duration::from_millis(200));
+        cell.take();
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(cell.take().peak, 0.0, "no polling while hidden");
+
+        service.send(Request::UiVisible(true));
+        wait_for(&service, |_| cell.take().peak > 0.0);
     }
 
     #[test]

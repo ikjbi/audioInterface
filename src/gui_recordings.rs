@@ -173,6 +173,8 @@ impl RecordingsPanel {
             }
         });
         let Some(path) = self.selected.clone() else { return };
+        // Keep only the session on screen in memory.
+        self.cache.retain(|p, _| *p == path);
         let loaded = self.cache.entry(path.clone()).or_insert_with(|| {
             analysis::read_csv(&path)
                 .map(|rows| {
@@ -322,14 +324,21 @@ pub fn session_chart(ui: &mut egui::Ui, rows: &[Sample], report: Option<&Report>
         }
     }
 
-    // Per-second RMS bars.
-    let bar_w = (rect.width() / rows.len() as f32).max(1.0);
+    // Per-second RMS bars, at most one per pixel column (the loudest second in
+    // it), so a long session costs no more to draw than a short one.
+    let columns = rect.width().max(1.0) as usize;
+    let mut loudest = vec![floor; columns];
     for r in rows {
-        if r.rms_db <= floor {
+        let c = ((x_at(r.t) - rect.left()) as usize).min(columns - 1);
+        loudest[c] = loudest[c].max(r.rms_db);
+    }
+    let bar_w = (rect.width() / rows.len() as f32).max(1.0);
+    for (c, db) in loudest.iter().enumerate() {
+        if *db <= floor {
             continue;
         }
-        let x = x_at(r.t);
-        let bar = egui::Rect::from_min_max(pos2(x, y_db(r.rms_db)), pos2(x + bar_w, rect.bottom()));
+        let x = rect.left() + c as f32;
+        let bar = egui::Rect::from_min_max(pos2(x, y_db(*db)), pos2((x + bar_w).min(rect.right()), rect.bottom()));
         painter.rect_filled(bar, 0.0, GREEN.gamma_multiply(0.45));
     }
 
@@ -353,17 +362,28 @@ pub fn session_chart(ui: &mut egui::Ui, rows: &[Sample], report: Option<&Report>
             .line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], Stroke::new(1.0, GREEN.gamma_multiply(0.5)));
     }
 
-    // OS gain as a step line.
-    let mut gain_pts = Vec::new();
+    // OS gain as a step line: points only where it changes.
+    let mut gain_pts: Vec<egui::Pos2> = Vec::new();
+    let mut last_x = rect.left();
     for r in rows {
         if let Some(g) = r.gain_pct {
-            let x = x_at(r.t);
-            if let Some(&last) = gain_pts.last() {
-                let last: egui::Pos2 = last;
-                gain_pts.push(pos2(x, last.y));
+            let (x, y) = (x_at(r.t), y_gain(g));
+            last_x = x;
+            match gain_pts.last() {
+                Some(last) if (last.y - y).abs() < 0.01 => continue,
+                Some(last) => {
+                    let ly = last.y;
+                    gain_pts.push(pos2(x, ly));
+                }
+                None => {}
             }
-            gain_pts.push(pos2(x, y_gain(g)));
+            gain_pts.push(pos2(x, y));
         }
+    }
+    if let Some(last) = gain_pts.last().copied()
+        && last_x > last.x
+    {
+        gain_pts.push(pos2(last_x, last.y));
     }
     if gain_pts.len() >= 2 {
         painter.add(egui::Shape::line(gain_pts, Stroke::new(1.5, BLUE)));

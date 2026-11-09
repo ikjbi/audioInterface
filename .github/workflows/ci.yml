@@ -65,6 +65,30 @@ jobs:
           $BIN --mock volume output "LG" 30
           $BIN --mock meter --seconds 1
 
+      # Install the latest published release over a copy of this build, the way
+      # "Check for updates" does (on macOS into an .app bundle).
+      - name: Updater end to end
+        shell: bash
+        env:
+          AUDIO_INTERFACE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euxo pipefail
+          DIR="$RUNNER_TEMP/updater-test"
+          rm -rf "$DIR" && mkdir -p "$DIR"
+          if [ "$RUNNER_OS" = macOS ]; then
+            bash scripts/bundle-macos.sh target/debug/audio-interface 0.0.1 "$DIR"
+            BIN="$DIR/Audio Interface.app/Contents/MacOS/audio-interface"
+          else
+            EXE=audio-interface; [ "$RUNNER_OS" = Windows ] && EXE=audio-interface.exe
+            cp "target/debug/$EXE" "$DIR/"
+            BIN="$DIR/$EXE"
+          fi
+          "$BIN" update --check
+          AUDIO_INTERFACE_PRETEND_VERSION=0.0.1 "$BIN" update
+          ! cmp -s "$BIN" "target/debug/audio-interface$([ "$RUNNER_OS" = Windows ] && echo .exe || true)"
+          "$BIN" --version
+          ls -la "$DIR"
+
       - uses: actions/upload-artifact@v4
         with:
           name: audio-interface-${{ runner.os }}-debug

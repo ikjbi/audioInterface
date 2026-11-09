@@ -169,11 +169,24 @@ Teams/Zoom to your headset while music stays on the speakers. The CALLS label sh
     Topic {
         id: "privacy",
         title: "Privacy and files",
-        body: "Everything stays on your computer. The app has no accounts, no tracking and no network use.\n\n\
+        body: "Everything stays on your computer. The app has no accounts and no tracking. The only time it uses the \
+network is when you press \"Check for updates\" (see \"Updates\").\n\n\
 • Meters need microphone permission. On a Mac: System Settings → Privacy & Security → Microphone. On \
 Windows: Settings → Privacy & security → Microphone → \"Let desktop apps access your microphone\".\n\
 • Audio is only written to disk when you record with \"Include audio\" on.\n\
 • Recordings: Documents/Audio Interface Recordings. Settings: see the path at the bottom of Settings.",
+    },
+    Topic {
+        id: "updates",
+        title: "Updates",
+        body: "Settings → Updates → \"Check for updates\" asks GitHub whether a newer version has been released. It only \
+checks when you press the button, and nothing about you or your devices is sent.\n\n\
+If there is one, \"Update and restart\" downloads it, replaces the app where it is installed (the folder you \
+unzipped it to, or Audio Interface.app), and starts the new version. Your settings, profiles and recordings are \
+kept. No admin rights are needed, as long as you can write to the app's folder. If you can't (e.g. IT installed \
+it under Program Files), you get a link to download it by hand.\n\n\
+From the command line: audio-interface update (or update --check to only look). On a Mac, the first start after \
+an update may ask for microphone access again.",
     },
     Topic {
         id: "trouble",

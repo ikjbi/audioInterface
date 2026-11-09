@@ -26,6 +26,10 @@ struct Cli {
     #[arg(long)]
     minimized: bool,
 
+    /// Started by the updater: wait for the old copy to exit first.
+    #[arg(long, hide = true)]
+    after_update: bool,
+
     /// Use this settings file instead of the default one in the OS config directory.
     #[arg(long, global = true, env = "AUDIO_INTERFACE_SETTINGS", value_name = "PATH")]
     settings: Option<std::path::PathBuf>,
@@ -169,6 +173,12 @@ enum Cmd {
     },
     /// Print a diagnostics report (for bug reports).
     Diagnostics,
+    /// Check GitHub for a newer version and install it over this copy.
+    Update {
+        /// Only check and print; don't install.
+        #[arg(long)]
+        check: bool,
+    },
     /// Export or import settings (profiles, gain locks, preferences, …).
     Settings {
         #[command(subcommand)]
@@ -260,6 +270,18 @@ fn run(cli: Cli) -> Result<()> {
     let settings_path = cli.settings.clone().or_else(Settings::default_path);
     match cli.command.unwrap_or(Cmd::Gui) {
         Cmd::Gui => {
+            if cli.after_update {
+                // The previous version is still shutting down; wait until it has
+                // released the single-instance port rather than handing over to it.
+                let port = audio_interface::single_instance::port();
+                let start = std::time::Instant::now();
+                while start.elapsed() < std::time::Duration::from_secs(15)
+                    && std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).is_err()
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+            }
+            audio_interface::updater::cleanup();
             // Single instance: if the app is already running, bring it to the front.
             if !mock && std::env::var_os(audio_interface::gui::SCREENSHOT_ENV).is_none() {
                 let port = audio_interface::single_instance::port();
@@ -474,6 +496,32 @@ fn run(cli: Cli) -> Result<()> {
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
+        }
+        Cmd::Update { check } => {
+            use audio_interface::updater;
+            println!("This is version {}. Checking GitHub…", updater::current_version());
+            let Some(release) = updater::check()? else {
+                println!("You have the latest version.");
+                return Ok(());
+            };
+            println!("Version {} is available: {}", release.version, release.page_url);
+            if check {
+                return Ok(());
+            }
+            let last = std::sync::atomic::AtomicU64::new(0);
+            let installed = updater::install(&release, &|done, total| {
+                let pct = (done * 100).checked_div(total).unwrap_or(0);
+                if pct >= last.load(std::sync::atomic::Ordering::Relaxed) + 10 {
+                    last.store(pct, std::sync::atomic::Ordering::Relaxed);
+                    eprintln!("  downloaded {pct}%");
+                }
+            })?;
+            println!(
+                "Installed version {} at {}. Restart Audio Interface to use it.",
+                installed.version,
+                installed.path.display()
+            );
+            Ok(())
         }
         Cmd::Diagnostics => {
             let settings = settings_path.as_deref().map(Settings::load).unwrap_or_default();

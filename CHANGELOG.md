@@ -5,6 +5,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-09
+
+### Added
+- **Check for updates** (Settings → Updates, or `audio-interface update`): finds the newest
+  release on GitHub and, with "Update and restart", installs it where the app already is and
+  restarts. No admin rights needed. It only contacts GitHub when you press the button.
+
+### Fixed
+- **Much lower CPU/GPU use** (reported as loud fans on Windows), from a code review
+  (`.code-review/REVIEW_LOG.md`, findings F-0001…F-0012):
+  - the window redraws quickly only while a meter is actually moving; in silence it drops to
+    2 redraws a second. On Windows every output has a meter, so before this the window redrew
+    30 times a second whenever it was focused, even with nothing playing;
+  - meters that only feed the display are closed 10 s after the window is hidden or minimized.
+    An open mic kept Windows' audio engine and the headset's effects (noise suppression, Sonar)
+    running all the time. Recordings keep their meter;
+  - Windows: device objects are kept between refreshes, and audio sessions are listed once per
+    refresh instead of twice;
+  - dragging a slider no longer re-lists all devices about 30 times a second;
+  - the session chart draws at most one bar per pixel (an 8-hour recording drew ~29,000 bars
+    per frame);
+  - smaller savings: the device snapshot is copied only when it changes, the noise floor is
+    computed once per frame, the event log lays out only visible rows, only the selected
+    recording is kept in memory, and settings are saved at most once a second.
+- Hotkeys that couldn't be registered were retried every frame (and their error flickered).
+- The spectrum analyzer's fall-off no longer depends on the frame rate.
+- The Settings window scrolls when it is taller than the screen.
+
 ## [0.1.2] - 2026-11-09
 
 ### Fixed

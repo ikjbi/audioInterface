@@ -1,6 +1,6 @@
 [package]
 name = "audio-interface"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 rust-version = "1.88"
 description = "Cross-platform audio device manager: pick default inputs/outputs, monitor levels, lock mic gain."
@@ -39,6 +39,10 @@ serde_json = "1.0.154"
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 cpal = "0.18.2"
 tray-icon = "0.24.2"
+# Update checks over the OS's own TLS (no C compiler needed for the build). On Linux
+# the updater uses curl/wget instead: native TLS would need OpenSSL headers (sudo)
+# and rustls's crypto needs a C toolchain.
+ureq = { version = "3.5.1", default-features = false, features = ["native-tls"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 cpal = { version = "0.18.2", features = ["pulseaudio"] }
@@ -56,6 +60,7 @@ windows = { version = "0.62", features = [
     "Win32_Devices_FunctionDiscovery",
 ] }
 windows-core = "0.62"
+zip = { version = "9.5.0", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1.34"

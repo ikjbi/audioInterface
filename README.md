@@ -71,6 +71,8 @@ Windows or macOS warns about an app from an unidentified developer, are in
 - **Comfort:** rename or hide devices, start at login, desktop notifications, light/dark theme,
   single instance, diagnostics for bug reports, settings export/import.
 - **Event log:** connects, disconnects, default changes, gain restores and errors.
+- **Updates from inside the app:** Settings → Updates → "Check for updates" installs the newest
+  release in place and restarts (no admin rights; the only time the app uses the network).
 - **Scriptable CLI:** everything above is also available from the terminal
   (`audio-interface --help`).
 
@@ -143,6 +145,7 @@ audio-interface profile save Calls       # profiles: list | save | apply | delet
 audio-interface apps                     # per-app mixer: apps, app-volume, app-mute
 audio-interface test-tone --channel left # also: mic-test, balance, sample-rate, card-profile
 audio-interface diagnostics              # for bug reports
+audio-interface update [--check]         # install the latest release over this copy
 ```
 
 Devices can be given by ID, exact name, or any unique part of the name (case-insensitive).

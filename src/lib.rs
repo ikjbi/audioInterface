@@ -29,3 +29,4 @@ pub mod settings;
 pub mod single_instance;
 pub mod spectrum;
 pub mod splash;
+pub mod updater;
