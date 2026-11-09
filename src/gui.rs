@@ -99,6 +99,9 @@ struct App {
     recordings_panel: RecordingsPanel,
     splash: crate::splash::Splash,
     new_profile_name: String,
+    /// Help window: open, and the selected topic.
+    help_open: bool,
+    help_topic: &'static str,
     start_minimized: bool,
     autostart: Option<bool>,
     /// Device being renamed and the text typed so far.
@@ -141,6 +144,8 @@ impl App {
             frame_count: 0,
             splash: crate::splash::Splash::new(),
             new_profile_name: String::new(),
+            help_open: std::env::var("AUDIO_INTERFACE_OPEN").is_ok_and(|v| v == "help"),
+            help_topic: "recording",
             start_minimized: false,
             autostart: None,
             renaming: None,
@@ -242,6 +247,9 @@ impl App {
             let api = if self.view.api.is_empty() { "connecting…" } else { self.view.api };
             ui.label(RichText::new(format!("{api} · meters via {}", self.view.meter_host)).color(MUTED_TEXT).small());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("❓ Help").clicked() {
+                    self.help_open = !self.help_open;
+                }
                 if ui.button("⚙ Settings").clicked() {
                     self.show_settings = !self.show_settings;
                 }
@@ -278,8 +286,48 @@ impl App {
         });
     }
 
+    /// A small "?" that opens the help at `topic`.
+    fn help_button(&mut self, ui: &mut egui::Ui, topic: &'static str) {
+        let title = crate::help::topic(topic).map(|t| t.title).unwrap_or("Help");
+        if ui.small_button("?").on_hover_text(format!("Help: {title}")).clicked() {
+            self.help_topic = topic;
+            self.help_open = true;
+        }
+    }
+
+    fn help_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.help_open;
+        egui::Window::new("❓ Help").open(&mut open).default_size([720.0, 480.0]).resizable(true).show(ctx, |ui| {
+            ui.horizontal_top(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(210.0);
+                    egui::ScrollArea::vertical().id_salt("help-topics").show(ui, |ui| {
+                        for t in crate::help::TOPICS {
+                            ui.selectable_value(&mut self.help_topic, t.id, t.title);
+                        }
+                    });
+                });
+                ui.separator();
+                ui.vertical(|ui| {
+                    egui::ScrollArea::vertical().id_salt("help-body").show(ui, |ui| {
+                        if let Some(t) = crate::help::topic(self.help_topic) {
+                            ui.heading(t.title);
+                            ui.add_space(6.0);
+                            ui.label(t.body);
+                        }
+                    });
+                });
+            });
+        });
+        self.help_open = open;
+    }
+
     fn profiles_menu(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(260.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Profiles").strong());
+            self.help_button(ui, "profiles");
+        });
         if self.settings.profiles.is_empty() {
             ui.label(RichText::new("No profiles yet. Save your current setup below.").small().color(MUTED_TEXT));
         }
@@ -365,7 +413,10 @@ impl App {
             Direction::Input => "🎤 Inputs",
             Direction::Output => "🔊 Outputs",
         };
-        ui.label(RichText::new(title).heading());
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(title).heading());
+            self.help_button(ui, "start");
+        });
         if devices.is_empty() {
             ui.label(RichText::new(format!("No {dir} devices found")).color(MUTED_TEXT));
         }
@@ -575,7 +626,7 @@ impl App {
                         Some((k, v)) if *k == key => *v,
                         _ => vol * 100.0,
                     };
-                    let width = (ui.available_width() - 160.0).max(80.0);
+                    let width = (ui.available_width() - 185.0).max(80.0);
                     ui.spacing_mut().slider_width = width;
                     let resp = ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).suffix("%").fixed_decimals(0));
                     if resp.dragged() || resp.changed() {
@@ -605,6 +656,7 @@ impl App {
                         self.settings.set_gain_lock(DeviceRef::of(d), d.direction, v);
                         self.settings_changed();
                     }
+                    self.help_button(ui, if d.direction == Direction::Input { "gainlock" } else { "volume" });
                 } else {
                     ui.label(RichText::new("No software volume control").small().color(MUTED_TEXT));
                 }
@@ -716,6 +768,7 @@ impl App {
                         }
                     }
                 }
+                self.help_button(ui, if recording.is_some() || d.direction == Direction::Input { "recording" } else { "preferred" });
             });
         });
     }
@@ -760,6 +813,7 @@ impl App {
         let user_monitored = self.view.monitored.contains(&key);
         let floor = self.settings.meter_floor_db;
 
+        let mut want_help = false;
         if let Some(m) = self.meters.get(&key) {
             ui.horizontal(|ui| {
                 let w = (ui.available_width() - 150.0).max(60.0);
@@ -770,6 +824,9 @@ impl App {
                     format!("{:.1} dB", m.peak_hold_db)
                 };
                 ui.label(RichText::new(peak).monospace());
+                if ui.small_button("?").on_hover_text("Help: level meters").clicked() {
+                    want_help = true;
+                }
                 if !native {
                     let (txt, color) = match m.status {
                         SignalStatus::Ok => ("●", GREEN),
@@ -895,6 +952,10 @@ impl App {
                 });
             }
         }
+        if want_help {
+            self.help_topic = "meters";
+            self.help_open = true;
+        }
     }
 
     fn settings_window(&mut self, ctx: &egui::Context) {
@@ -935,7 +996,13 @@ impl App {
                 )
                 .changed();
             ui.separator();
-            ui.heading("Global hotkeys");
+            ui.horizontal(|ui| {
+                ui.heading("Global hotkeys");
+                if ui.small_button("?").clicked() {
+                    self.help_topic = "hotkeys";
+                    self.help_open = true;
+                }
+            });
             ui.label(RichText::new("Work in any app. Syntax: Ctrl+Alt+M (Ctrl is ⌃ on macOS; use CmdOrCtrl for ⌘). Leave empty to disable.").small().color(MUTED_TEXT));
             egui::Grid::new("hotkeys").num_columns(2).show(ui, |ui| {
                 for (label, value) in [
@@ -1230,6 +1297,13 @@ impl eframe::App for App {
 
         if self.show_settings {
             self.settings_window(&ctx);
+        }
+        if let Some(t) = self.recordings_panel.help_request.take() {
+            self.help_topic = t;
+            self.help_open = true;
+        }
+        if self.help_open {
+            self.help_window(&ctx);
         }
         if self.recordings_panel.open {
             let changed = self.recordings_panel.show(

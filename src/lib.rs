@@ -16,6 +16,7 @@ pub mod desktop;
 pub mod diagnostics;
 pub mod gui;
 pub mod gui_recordings;
+pub mod help;
 pub mod icon;
 pub mod levels;
 pub mod meter;

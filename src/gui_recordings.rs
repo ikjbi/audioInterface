@@ -27,6 +27,8 @@ pub struct RecordingsPanel {
     pub(crate) files_listed: Option<Instant>,
     pub(crate) known_finished: usize,
     pub(crate) apps_text: Option<String>,
+    /// Help topic the user asked for (read and cleared by the app).
+    pub help_request: Option<&'static str>,
 }
 
 impl RecordingsPanel {
@@ -78,6 +80,9 @@ impl RecordingsPanel {
     fn settings_section(&mut self, ui: &mut egui::Ui, settings: &mut Settings, dir: &Path) -> bool {
         let mut changed = false;
         ui.horizontal_wrapped(|ui| {
+            if ui.small_button("?").on_hover_text("Help: auto-record calls").clicked() {
+                self.help_request = Some("autorecord");
+            }
             changed |= ui
                 .checkbox(&mut settings.auto_record_calls, "Auto-record calls")
                 .on_hover_text(
@@ -151,6 +156,9 @@ impl RecordingsPanel {
     fn history_section(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(RichText::new("Past sessions").strong());
+            if ui.small_button("?").on_hover_text("Help: reading the report").clicked() {
+                self.help_request = Some("recording");
+            }
             egui::ComboBox::from_id_salt("rec-select")
                 .width(380.0)
                 .selected_text(self.selected.as_deref().map(file_label).unwrap_or_else(|| "choose a recording…".into()))

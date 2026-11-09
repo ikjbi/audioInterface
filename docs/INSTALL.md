@@ -3,6 +3,7 @@
 Audio Interface is a single, self-contained program. **None of the options below need
 administrator / root rights**, unless a section says otherwise.
 
+- [Quick start: download and run](#quick-start-download-and-run)
 - [Windows](#windows)
   - [Portable zip (recommended, no admin)](#portable-zip-recommended-no-admin)
   - [Build from source without admin](#build-from-source-on-windows-without-admin)
@@ -14,8 +15,25 @@ administrator / root rights**, unless a section says otherwise.
 - [Corporate / locked-down machines](#corporate--locked-down-machines)
 
 Pre-built downloads are attached to each
-[GitHub release](https://github.com/ikjbi/audioInterface/releases). If there is no release
-yet, use "Build from source".
+[GitHub release](https://github.com/ikjbi/audioInterface/releases) (current: `v0.1.0-alpha.1`).
+
+---
+
+## Quick start: download and run
+
+1. Download the file for your computer:
+   - **Windows:** [audio-interface-windows-x86_64.zip](https://github.com/ikjbi/audioInterface/releases/download/v0.1.0-alpha.1/audio-interface-windows-x86_64.zip)
+   - **macOS:** [audio-interface-macos-universal.zip](https://github.com/ikjbi/audioInterface/releases/download/v0.1.0-alpha.1/audio-interface-macos-universal.zip)
+   - **Linux:** [audio-interface-linux-x86_64.tar.gz](https://github.com/ikjbi/audioInterface/releases/download/v0.1.0-alpha.1/audio-interface-linux-x86_64.tar.gz)
+2. Follow the steps for your OS below. The app is not code-signed yet, so the first launch needs
+   one extra click:
+   - **Windows:** "Windows protected your PC" → **More info** → **Run anyway**.
+   - **macOS:** "Audio Interface can't be opened / Apple could not verify…" → click **Done**, open
+     **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to *Audio
+     Interface*, then confirm. (On macOS 14 and older you can also right-click the app → **Open**.)
+     Terminal alternative: `xattr -dr com.apple.quarantine "/Applications/Audio Interface.app"`.
+   - **Linux:** no prompt.
+3. Allow microphone access when asked. It's needed for level meters and recordings.
 
 ---
 
@@ -144,7 +162,20 @@ Then install it for your user with
 
 ## macOS
 
-macOS 12 or newer (macOS 14+ for "which app is using the mic").
+macOS 12 or newer (macOS 14+ for "which app is using the mic"). Works on Apple Silicon and Intel.
+
+### Download (recommended, no admin)
+
+1. Download [audio-interface-macos-universal.zip](https://github.com/ikjbi/audioInterface/releases/download/v0.1.0-alpha.1/audio-interface-macos-universal.zip) and
+   double-click it to unzip.
+2. Drag **Audio Interface** into **Applications**. Your own `~/Applications` folder works too,
+   without admin rights.
+3. Open it. The first time, macOS blocks it because it's not notarized: open **System Settings →
+   Privacy & Security** and click **Open Anyway** (see Quick start above).
+4. Allow microphone access when asked. It's needed for meters and recordings. If you clicked
+   "Don't Allow", turn it on under **System Settings → Privacy & Security → Microphone**.
+
+### Build from source
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y

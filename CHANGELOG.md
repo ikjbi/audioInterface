@@ -5,7 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0-alpha.1] - 2026-11-09
+
+First public pre-release.
+
 ### Added
+- **In-app help**: a ❓ Help window explaining every feature in plain language, plus "?" buttons next
+  to controls (gain lock, meters, record, profiles, auto-record, hotkeys) that open the right topic.
+- **Download section** in the README and quick-start steps in `docs/INSTALL.md`, including how to
+  get past SmartScreen and Gatekeeper for the unsigned app.
 - **Per-app mixer** (Windows, Linux): an "Apps" section on each device with per-application volume
   and mute; CLI `apps`, `app-volume`, `app-mute`. macOS has no public API for it.
 - **Loudness (EBU R128)**: momentary (400 ms) and short-term (3 s) LUFS for metered inputs, using
