@@ -46,7 +46,17 @@ pub struct Sample {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Finding {
     /// The OS gain/volume setting changed.
-    GainChange { t: f64, time: String, from: f32, to: f32 },
+    GainChange {
+        t: f64,
+        time: String,
+        from: f32,
+        to: f32,
+        /// What happened around it, e.g. "2 s after Microsoft Teams stopped using the device".
+        #[serde(default)]
+        context: Option<AppContext>,
+    },
+    /// An app started or stopped using the device (from the `in_use_by` column).
+    AppUse { t: f64, time: String, app: String, started: bool },
     /// Speaking level fell well below the session's baseline.
     LevelDrop {
         start: f64,
@@ -64,6 +74,30 @@ pub enum Finding {
     HandsFree { t: f64, time: String, on: bool },
     /// Free-text event from the log (disconnects, gain-lock restores, ...).
     Event { t: f64, time: String, text: String },
+}
+
+/// An app start/stop near a gain change: likely the cause.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AppContext {
+    pub app: String,
+    /// True if the app started using the device, false if it stopped.
+    pub started: bool,
+    /// Seconds from the app change to the gain change (negative: the gain changed first).
+    pub seconds_after: f64,
+}
+
+impl AppContext {
+    fn describe(&self) -> String {
+        let what = if self.started { "started" } else { "stopped" };
+        let s = self.seconds_after.abs().round() as i64;
+        if s == 0 {
+            format!("as {} {what} using the device", self.app)
+        } else if self.seconds_after > 0.0 {
+            format!("{s} s after {} {what} using the device", self.app)
+        } else {
+            format!("{s} s before {} {what} using the device", self.app)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -192,6 +226,7 @@ pub fn analyze_with(samples: &[Sample], p: &Params) -> Report {
                     time: samples[start].time.clone(),
                     from: a,
                     to,
+                    context: None,
                 });
             }
             i = j + 1;
@@ -271,6 +306,34 @@ pub fn analyze_with(samples: &[Sample], p: &Params) -> Report {
             findings.push(Finding::HandsFree { t: w[1].t, time: w[1].time.clone(), on: w[1].hands_free });
         }
     }
+    // Apps starting / stopping to use the device (e.g. a Teams call starting or ending).
+    let apps_of = |s: &Sample| -> std::collections::BTreeSet<String> {
+        s.in_use_by.split(';').map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).collect()
+    };
+    let mut app_changes = Vec::new();
+    for w in samples.windows(2) {
+        let (before, after) = (apps_of(&w[0]), apps_of(&w[1]));
+        for app in after.difference(&before) {
+            app_changes.push((w[1].t, w[1].time.clone(), app.clone(), true));
+        }
+        for app in before.difference(&after) {
+            app_changes.push((w[1].t, w[1].time.clone(), app.clone(), false));
+        }
+    }
+    // Explain gain changes by a nearby app start/stop (within 15 s).
+    for f in findings.iter_mut() {
+        if let Finding::GainChange { t, context, .. } = f {
+            *context = app_changes
+                .iter()
+                .filter(|c| (*t - c.0).abs() <= 15.0)
+                .min_by(|a, b| (*t - a.0).abs().total_cmp(&(*t - b.0).abs()))
+                .map(|c| AppContext { app: c.2.clone(), started: c.3, seconds_after: *t - c.0 });
+        }
+    }
+    for (t, time, app, started) in app_changes {
+        findings.push(Finding::AppUse { t, time, app, started });
+    }
+
     for s in samples {
         let markers = ["Recording started", "Recording stopped"];
         for e in
@@ -295,14 +358,39 @@ fn time_at(samples: &[Sample], t: f64) -> String {
 
 pub fn finding_t(f: &Finding) -> f64 {
     match f {
-        Finding::GainChange { t, .. } | Finding::HandsFree { t, .. } | Finding::Event { t, .. } => *t,
+        Finding::GainChange { t, .. }
+        | Finding::HandsFree { t, .. }
+        | Finding::Event { t, .. }
+        | Finding::AppUse { t, .. } => *t,
         Finding::LevelDrop { start, .. } | Finding::Period { start, .. } => *start,
     }
 }
 
 fn verdict(findings: &[Finding], baseline: Option<f32>, duration: f64, no_speech: bool) -> String {
     let drops: Vec<&Finding> = findings.iter().filter(|f| matches!(f, Finding::LevelDrop { .. })).collect();
-    let gain_downs = findings.iter().filter(|f| matches!(f, Finding::GainChange { from, to, .. } if to < from)).count();
+    // Gain changes explained by an app starting/stopping (call start/end) are reported
+    // separately and not counted as problems.
+    let gain_downs = findings
+        .iter()
+        .filter(|f| matches!(f, Finding::GainChange { from, to, context: None, .. } if to < from))
+        .count();
+    let explained: Vec<String> = findings
+        .iter()
+        .filter_map(|f| match f {
+            Finding::GainChange { time, from, to, context: Some(c), .. } => {
+                let why = if c.started {
+                    "the app setting the mic level as the call started"
+                } else {
+                    "the app restoring the mic level it had before the call, as the call ended"
+                };
+                Some(format!(
+                    "The gain change at {time} ({from:.0}% → {to:.0}%) happened {}: most likely {why}, not a problem during the call.",
+                    c.describe()
+                ))
+            }
+            _ => None,
+        })
+        .collect();
     let lost = findings.iter().filter(|f| matches!(f, Finding::Period { what: PeriodKind::SignalLost, .. })).count();
     let mut parts = Vec::new();
     if duration < 120.0 {
@@ -337,6 +425,7 @@ fn verdict(findings: &[Finding], baseline: Option<f32>, duration: f64, no_speech
     if gain_downs > 0 && drops.iter().all(|d| !matches!(d, Finding::LevelDrop { gain_lowered: true, .. })) {
         parts.push(format!("The OS gain was lowered {gain_downs} time(s) during the session (see the findings)."));
     }
+    parts.extend(explained);
     if lost > 0 {
         parts.push(format!("The signal was lost {lost} time(s) (device disconnected or stopped delivering audio)."));
     }
@@ -356,9 +445,16 @@ impl fmt::Display for PeriodKind {
 impl fmt::Display for Finding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Finding::GainChange { time, from, to, .. } => {
+            Finding::GainChange { time, from, to, context, .. } => {
                 let dir = if to < from { "lowered" } else { "raised" };
-                write!(f, "{time}  OS gain {dir} from {from:.0}% to {to:.0}%")
+                write!(f, "{time}  OS gain {dir} from {from:.0}% to {to:.0}%")?;
+                if let Some(c) = context {
+                    write!(f, " ({})", c.describe())?;
+                }
+                Ok(())
+            }
+            Finding::AppUse { time, app, started, .. } => {
+                write!(f, "{time}  {app} {} using the device", if *started { "started" } else { "stopped" })
             }
             Finding::LevelDrop { start_time, end_time, baseline_db, lowest_db, gain_lowered, .. } => write!(
                 f,
@@ -470,6 +566,30 @@ mod tests {
         }
         assert!(r.verdict.contains("gain was lowered"), "{}", r.verdict);
         assert!(r.to_text("t").contains("OS gain lowered from 80% to 40%"));
+    }
+
+    #[test]
+    fn gain_change_at_call_end_is_attributed_to_the_app() {
+        // The situation from a real Teams call: gain steady at 100% while Teams uses the
+        // mic, Teams lets go at 85 s, gain drops to 34% two seconds later.
+        let mut s = call(2, |_| -60.0, |i| if i < 87 { 100.0 } else { 34.0 });
+        for (i, x) in s.iter_mut().enumerate() {
+            x.in_use_by = if i < 85 { "Microsoft Teams".into() } else { String::new() };
+        }
+        let r = analyze(&s);
+        let g = r.findings.iter().find(|f| matches!(f, Finding::GainChange { .. })).unwrap();
+        match g {
+            Finding::GainChange { context: Some(c), .. } => {
+                assert_eq!(c.app, "Microsoft Teams");
+                assert!(!c.started);
+                assert_eq!(c.seconds_after, 2.0);
+            }
+            other => panic!("no context: {other:?}"),
+        }
+        assert!(g.to_string().contains("2 s after Microsoft Teams stopped using the device"), "{g}");
+        assert!(r.findings.iter().any(|f| matches!(f, Finding::AppUse { started: false, .. })));
+        assert!(r.verdict.contains("restoring the mic level it had before the call"), "{}", r.verdict);
+        assert!(!r.verdict.contains("lowered 1 time"), "explained changes are not counted: {}", r.verdict);
     }
 
     #[test]

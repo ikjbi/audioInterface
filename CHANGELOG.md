@@ -16,6 +16,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Profiles: the name field closed the menu**, so "Save current" could never be enabled.
   Profiles is now a small window.
 
+### Added
+- Recording reports show when apps start or stop using the device, and explain a gain change
+  that happens right as an app (e.g. Teams) leaves or joins the mic: "2 s after Microsoft Teams
+  stopped using the device: most likely the app restoring the mic level it had before the call".
+  Such changes are no longer counted as problems. Past recordings get this when reopened.
+
 ### Changed
 - Download links point at the latest release (`releases/latest/download/…`).
 

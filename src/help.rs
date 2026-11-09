@@ -101,7 +101,10 @@ When you stop (■ Stop), you get a report:\n\
 • the reason: if the OS gain was lowered at that time, an app did it (Teams' automatic mic adjustment is \
 the usual suspect, so lock the gain). If the gain didn't change, the cause is acoustic or hardware: mic \
 position, headset fit, Bluetooth link quality or battery saving.\n\
-• gain changes, signal losses, muted periods and hands-free switches, with times.\n\n\
+• gain changes, signal losses, muted periods and hands-free switches, with times.\n\
+• when an app (e.g. Teams) starts or stops using the mic. A gain change right when a call starts or \
+ends is explained as the app setting or restoring its level, not counted as a problem. (Teams' \
+automatic mic adjustment often raises the gain during a call and puts it back afterwards.)\n\n\
 Open ⏺ Recordings to see past sessions with a chart: green = your level, blue = OS gain, red areas = \
 drops. Hover the chart to read exact values. Files are saved in Documents/Audio Interface Recordings \
 (a CSV you can open in Excel, plus a report and the WAV).",

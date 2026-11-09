@@ -303,6 +303,13 @@ pub fn session_chart(ui: &mut egui::Ui, rows: &[Sample], report: Option<&Report>
                         egui::Rect::from_x_y_ranges(x_at(*start)..=x_at(*end).max(x_at(*start) + 1.0), rect.y_range());
                     painter.rect_filled(r, 0.0, Color32::from_gray(90).gamma_multiply(0.5));
                 }
+                Finding::AppUse { t, .. } => {
+                    let x = x_at(*t);
+                    painter.line_segment(
+                        [pos2(x, rect.top()), pos2(x, rect.bottom())],
+                        Stroke::new(1.0, BLUE.gamma_multiply(0.5)),
+                    );
+                }
                 Finding::GainChange { t, .. } => {
                     let x = x_at(*t);
                     painter.line_segment(
