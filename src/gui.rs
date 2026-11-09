@@ -36,6 +36,7 @@ pub fn run(service: Service, settings: Settings, settings_path: Option<PathBuf>,
             .with_inner_size([1000.0, 740.0])
             .with_min_inner_size([440.0, 360.0])
             .with_icon(crate::icon::egui_icon()),
+        wgpu_options: low_power_wgpu(),
         ..Default::default()
     };
     eframe::run_native(
@@ -99,6 +100,7 @@ struct App {
     recordings_panel: RecordingsPanel,
     splash: crate::splash::Splash,
     new_profile_name: String,
+    profiles_open: bool,
     /// Help window: open, and the selected topic.
     help_open: bool,
     help_topic: &'static str,
@@ -144,6 +146,7 @@ impl App {
             frame_count: 0,
             splash: crate::splash::Splash::new(),
             new_profile_name: String::new(),
+            profiles_open: std::env::var("AUDIO_INTERFACE_OPEN").is_ok_and(|v| v == "profiles"),
             help_open: std::env::var("AUDIO_INTERFACE_OPEN").is_ok_and(|v| v == "help"),
             help_topic: "recording",
             start_minimized: false,
@@ -266,9 +269,15 @@ impl App {
                 {
                     self.recordings_panel.open = !self.recordings_panel.open;
                 }
-                ui.menu_button("🎚 Profiles", |ui| self.profiles_menu(ui))
-                    .response
-                    .on_hover_text("Save and switch between setups, e.g. \"Calls\" and \"Music\"");
+                // A window, not a drop-down menu: menus close on any click inside,
+                // which made the name field unusable.
+                if ui
+                    .selectable_label(self.profiles_open, "🎚 Profiles")
+                    .on_hover_text("Save and switch between setups, e.g. \"Calls\" and \"Music\"")
+                    .clicked()
+                {
+                    self.profiles_open = !self.profiles_open;
+                }
                 if ui.button("⟳ Refresh").clicked() {
                     self.service.send(Request::Refresh);
                 }
@@ -352,7 +361,6 @@ impl App {
             self.settings.gain_locks = p.gain_locks.clone();
             self.settings_changed();
             self.service.send(Request::ApplyProfile(p));
-            ui.close();
         }
         if let Some(name) = delete {
             self.settings.delete_profile(&name);
@@ -1305,6 +1313,11 @@ impl eframe::App for App {
         if self.help_open {
             self.help_window(&ctx);
         }
+        if self.profiles_open {
+            let mut open = true;
+            egui::Window::new("🎚 Profiles").open(&mut open).resizable(false).show(&ctx, |ui| self.profiles_menu(ui));
+            self.profiles_open = open;
+        }
         if self.recordings_panel.open {
             let changed = self.recordings_panel.show(
                 &ctx,
@@ -1331,7 +1344,16 @@ impl eframe::App for App {
         self.save_settings_if_needed();
         self.frame_count += 1;
         self.screenshot_step(&ctx);
-        ctx.request_repaint_after(Duration::from_millis(33));
+        // Adaptive frame rate. Redrawing is what costs CPU (the audio work runs on
+        // its own threads and continues regardless), so only animate fast while
+        // someone is actually looking.
+        let (focused, minimized, occluded) = ctx.input(|i| {
+            let v = i.viewport();
+            (v.focused.unwrap_or(true), v.minimized.unwrap_or(false), v.occluded.unwrap_or(false))
+        });
+        if let Some(ms) = repaint_interval_ms(focused, minimized || occluded || self.hidden, !self.meters.is_empty()) {
+            ctx.request_repaint_after(Duration::from_millis(ms));
+        }
     }
 
     fn on_exit(&mut self) {
@@ -1388,6 +1410,37 @@ fn draw_meter(ui: &mut egui::Ui, m: &MeterState, floor_db: f32, size: Vec2) {
     if m.clipped {
         let r = egui::Rect::from_min_size(egui::pos2(rect.right() - 6.0, rect.top()), Vec2::new(6.0, rect.height()));
         painter.rect_filled(r, 0.0, RED);
+    }
+}
+
+/// GPU settings for a light UI: use the integrated / low-power GPU. eframe's
+/// default (HighPerformance) wakes a laptop's discrete GPU and its fans. The
+/// `WGPU_POWER_PREF` environment variable still overrides this.
+fn low_power_wgpu() -> eframe::egui_wgpu::WgpuConfiguration {
+    use eframe::egui_wgpu::{SurfaceConfig, WgpuConfiguration, WgpuSetup};
+    use eframe::wgpu::PowerPreference;
+    let mut setup = WgpuSetup::without_display_handle();
+    if let WgpuSetup::CreateNew(create) = &mut setup
+        && PowerPreference::from_env().is_none()
+    {
+        create.power_preference = PowerPreference::LowPower;
+    }
+    WgpuConfiguration { surface: SurfaceConfig::LOW_LATENCY, wgpu_setup: setup, ..Default::default() }
+}
+
+/// How often to redraw (ms), or `None` to only redraw on events.
+/// Focused with live meters: 30 fps. In the background (e.g. watching meters
+/// during a call): 5 fps. Nothing animating: 2 fps. Not visible: no redraws
+/// (tray, hotkeys and the service keep working; they wake the UI when needed).
+fn repaint_interval_ms(focused: bool, not_visible: bool, meters: bool) -> Option<u64> {
+    if not_visible {
+        None
+    } else if !meters {
+        Some(500)
+    } else if focused {
+        Some(33)
+    } else {
+        Some(200)
     }
 }
 

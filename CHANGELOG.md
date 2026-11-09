@@ -5,6 +5,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-09
+
+### Fixed
+- **Much lower CPU and GPU use** (reported as loud fans on Windows). The window now redraws at 30
+  fps only while it is focused and meters are moving, 5 fps in the background, 2 fps when nothing
+  animates, and not at all when minimized, hidden or covered. It also uses the low-power
+  (integrated) GPU and a low-latency surface instead of eframe's default high-performance GPU,
+  which woke laptops' discrete GPUs. Measured on a MacBook: about 11% CPU before, 1–3% after.
+- **Profiles: the name field closed the menu**, so "Save current" could never be enabled.
+  Profiles is now a small window.
+
+### Changed
+- Download links point at the latest release (`releases/latest/download/…`).
+
 ## [0.1.0-alpha.1] - 2026-11-09
 
 First public pre-release.

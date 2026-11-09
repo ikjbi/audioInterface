@@ -1,6 +1,6 @@
 [package]
 name = "audio-interface"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Cross-platform audio device manager: pick default inputs/outputs, monitor levels, lock mic gain."
