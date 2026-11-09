@@ -403,10 +403,9 @@
       "summary": "Forced refreshes spaced >=150 ms; UiVisible pauses display-only meters and native polling after 10 s hidden; test added."
     },
     "src/updater.rs": {
-      "commit": "e978a08064d3562618ecd56085cd2a850d9bd7b5",
+      "commit": "2e1f9891fb96376817420a1af7856e9f4a02e816",
       "dirty": true,
       "focus": [
-        "performance",
         "bugs"
       ],
       "functions": [
@@ -435,6 +434,10 @@
           "note": ""
         },
         {
+          "name": "plain_path",
+          "note": ""
+        },
+        {
           "name": "relaunch",
           "note": ""
         },
@@ -447,11 +450,11 @@
           "note": ""
         }
       ],
-      "hash": "5406330add90a1619fdcd317f8456146133bd876",
-      "mode": "full",
-      "review_count": 1,
-      "reviewed_at": "2026-11-09T16:07:08+00:00",
-      "summary": "GitHub latest-release check, download (ureq/native TLS on Windows+macOS, curl/wget on Linux), extract, same-folder swap with rollback, relaunch. Verified end to end on macOS."
+      "hash": "2761ca59392f001e04432a29ff9fdf057004c44c",
+      "mode": "diff",
+      "review_count": 2,
+      "reviewed_at": "2026-11-09T16:20:50+00:00",
+      "summary": "install_target strips the \\\\?\\ verbatim prefix so restart uses the ordinary path."
     }
   },
   "findings": [
@@ -686,7 +689,18 @@
         "bugs"
       ],
       "scope": "fixes for F-0001..F-0012 and the new updater (v0.1.3)"
+    },
+    {
+      "commit": "2e1f9891fb96376817420a1af7856e9f4a02e816",
+      "date": "2026-11-09T16:20:50+00:00",
+      "files_reviewed": 1,
+      "findings_added": 0,
+      "findings_updated": 0,
+      "focus": [
+        "bugs"
+      ],
+      "scope": "updater: plain Windows paths"
     }
   ],
-  "updated_at": "2026-11-09T16:07:08+00:00"
+  "updated_at": "2026-11-09T16:20:50+00:00"
 }

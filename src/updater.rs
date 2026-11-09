@@ -217,7 +217,7 @@ pub fn check() -> Result<Option<Release>> {
 /// What gets replaced: the `.exe` / binary, or on macOS the `.app` bundle.
 fn install_target() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("cannot find the running program")?;
-    let exe = exe.canonicalize().unwrap_or(exe);
+    let exe = exe.canonicalize().map(plain_path).unwrap_or(exe);
     let dir = exe.parent().context("program has no folder")?;
     if dir.ends_with("target/debug") || dir.ends_with("target/release") || dir.ends_with("target\\release") {
         bail!("this is a development build ({}); update it with git and cargo instead", exe.display());
@@ -230,6 +230,16 @@ fn install_target() -> Result<PathBuf> {
             .context("updating needs the app bundle (Audio Interface.app); download the new version from the release page instead");
     }
     Ok(exe)
+}
+
+/// Windows: `canonicalize` gives `\\?\C:\...`; use the ordinary `C:\...` form
+/// (it is what shortcuts point to, and what gets started again).
+fn plain_path(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => p,
+    }
 }
 
 /// Result of [`install`]: where the new version is, to restart it.
@@ -383,6 +393,16 @@ mod tests {
         assert_eq!(r.asset_url, "https://example/w");
         assert_eq!(r.size, 20);
         assert!(parse_latest(json, "-macos-universal.zip").is_err());
+    }
+
+    #[test]
+    fn verbatim_windows_paths_become_plain() {
+        assert_eq!(
+            plain_path(PathBuf::from(r"\\?\D:\a\audio-interface.exe")),
+            PathBuf::from(r"D:\a\audio-interface.exe")
+        );
+        assert_eq!(plain_path(PathBuf::from(r"\\?\UNC\server\x.exe")), PathBuf::from(r"\\?\UNC\server\x.exe"));
+        assert_eq!(plain_path(PathBuf::from("/usr/bin/x")), PathBuf::from("/usr/bin/x"));
     }
 
     #[test]
