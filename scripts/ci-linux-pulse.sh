@@ -173,6 +173,9 @@ echo "captured peak: $P"
 python3 -c "import sys; p=float('$P'); sys.exit(0 if 0.08 < p < 0.3 else 1)" || fail "test tone peak $P"
 
 step "mic test (record the sine mic, play it back on ci_speakers)"
+# The balance step left ci_speakers at 60% (= 0.6^3 = 0.216 gain on PulseAudio's cubic scale).
+$BIN volume output ci_speakers 100
+$BIN volume input ci_sine_mic 100
 parec --device=ci_speakers.monitor --format=s16le --rate=48000 --channels=1 --raw > mic_cap.raw &
 PR=$!
 sleep 0.5
