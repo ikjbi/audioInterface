@@ -7,6 +7,30 @@ use std::time::{Duration, Instant};
 /// Anything quieter than this is shown as "silence" (-inf).
 pub const FLOOR_DB: f32 = -96.0;
 
+/// Typical speaking level (RMS, dBFS) below which colleagues are likely to hear
+/// you quietly. Clear speech into a mic is usually around -40 to -15 dBFS.
+pub const WEAK_SPEECH_DB: f32 = -50.0;
+
+/// Threshold above which a moment counts as sound (speech): 12 dB above the
+/// device's own noise floor. A fixed threshold fails for quiet analog headsets,
+/// whose whole voice can sit below -55 dBFS. Kept within -80..=-45 dBFS.
+pub fn speech_gate(noise_floor_db: Option<f32>) -> f32 {
+    match noise_floor_db {
+        Some(n) => (n + 12.0).clamp(-80.0, -45.0),
+        None => -55.0,
+    }
+}
+
+/// Lowest dB shown on a device's meters: the user's setting, extended down to
+/// 10 dB below the device's noise floor (in 6 dB steps) so a quiet mic still
+/// moves the meter visibly.
+pub fn display_floor(setting_db: f32, noise_floor_db: Option<f32>) -> f32 {
+    match noise_floor_db {
+        Some(n) => setting_db.min(((n - 10.0) / 6.0).floor() * 6.0).max(FLOOR_DB),
+        None => setting_db,
+    }
+}
+
 /// Convert a linear amplitude (0..=1, 1 = full scale) to dBFS.
 pub fn to_db(linear: f32) -> f32 {
     if linear <= 0.0 || !linear.is_finite() { FLOOR_DB } else { (20.0 * linear.log10()).max(FLOOR_DB) }
@@ -554,6 +578,21 @@ mod tests {
         assert_eq!(to_db(f32::NAN), FLOOR_DB);
         assert_eq!(to_db(1e-12), FLOOR_DB);
         assert!((from_db(-6.0206) - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn gates_and_floors_follow_the_noise() {
+        // Quiet analog headset: noise at -80, so speech from -68 counts.
+        assert_eq!(speech_gate(Some(-80.0)), -68.0);
+        // Very clean USB mic: clamp at -80.
+        assert_eq!(speech_gate(Some(-100.0)), -80.0);
+        // Noisy room: clamp at -45 so not everything counts as speech.
+        assert_eq!(speech_gate(Some(-40.0)), -45.0);
+        assert_eq!(speech_gate(None), -55.0);
+        assert_eq!(display_floor(-60.0, Some(-80.0)), -90.0);
+        assert_eq!(display_floor(-60.0, Some(-50.0)), -60.0, "never narrower than the setting");
+        assert_eq!(display_floor(-60.0, Some(-120.0)), FLOOR_DB);
+        assert_eq!(display_floor(-60.0, None), -60.0);
     }
 
     #[test]

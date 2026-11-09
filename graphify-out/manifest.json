@@ -1,0 +1,158 @@
+{
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/build.rs": {
+    "mtime": 1794179701.3212187,
+    "hash": "5daf8535b2f38fa54d9b658cf5c27084"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/scripts/device-smoke.py": {
+    "mtime": 1794180266.2659638,
+    "hash": "b7422973be47dec82857b0fe8ae49c8c"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/autostart.rs": {
+    "mtime": 1794180105.4042938,
+    "hash": "6a650ab11d1fb006c03ec638ef2c376c"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/rules.rs": {
+    "mtime": 1794176196.617922,
+    "hash": "4352af830b05c3275a3ef7ca8f547930"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/gui_recordings.rs": {
+    "mtime": 1794211936.559251,
+    "hash": "06e0382780564ec9ac99945df3c5b88b"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/diagnostics.rs": {
+    "mtime": 1794181684.590891,
+    "hash": "7d0b1ba665389c902a2665d95272c9ac"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/audio_tools.rs": {
+    "mtime": 1794181983.8995535,
+    "hash": "0bf46cebaa6ec8326e97290dffbefaf0"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/recorder.rs": {
+    "mtime": 1794181765.6625478,
+    "hash": "d39934b5489d4711d9cbe1c16cec9fa0"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/analysis.rs": {
+    "mtime": 1794211912.4429002,
+    "hash": "57d36ad1c387569068b655de7a09474d"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/lib.rs": {
+    "mtime": 1794206671.7798722,
+    "hash": "25312571aab7c154b2938ab4eab5779d"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/meter.rs": {
+    "mtime": 1794181752.7561705,
+    "hash": "5d6ecb61b4979e789f0acca9c3481860"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/icon.rs": {
+    "mtime": 1794179780.5240612,
+    "hash": "5586327c11e7a28ae7991e7e1cfd4ab6"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/service.rs": {
+    "mtime": 1794181911.4281898,
+    "hash": "e442eef325e0ab8e013869d837f3adaa"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/profiles.rs": {
+    "mtime": 1794180007.7416806,
+    "hash": "8bcf1cc24f6fe015c4ac5e7459578bb8"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/gui.rs": {
+    "mtime": 1794211585.7340124,
+    "hash": "49561a78232147d7aaa7359340872bcc"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/desktop.rs": {
+    "mtime": 1794180742.5561717,
+    "hash": "b05cc12eb30c53ebfd7b960632b1ceb8"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/splash.rs": {
+    "mtime": 1794180120.8611495,
+    "hash": "698d49c373096d375a350a2fc8325389"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/levels.rs": {
+    "mtime": 1794181798.3453767,
+    "hash": "72d9f8bdd976dc176697b0967e8ad7c5"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/help.rs": {
+    "mtime": 1794211936.5596123,
+    "hash": "2587e4938924afdefc9a68d9f8fe1092"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/main.rs": {
+    "mtime": 1794181911.428783,
+    "hash": "17b5514457c560fe201ea5960c8e1fa8"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/bluetooth.rs": {
+    "mtime": 1794175568.2879581,
+    "hash": "221f8a5507b76890767021d866c1146a"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/settings.rs": {
+    "mtime": 1794181669.8974407,
+    "hash": "1eff16ae0f2703bd312038e22405123b"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/model.rs": {
+    "mtime": 1794181850.6286273,
+    "hash": "fdb98bb52122eae37f4ea1d27911a88f"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/spectrum.rs": {
+    "mtime": 1794181100.6666198,
+    "hash": "665d368749870b7ab27f8d2c21146b72"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/single_instance.rs": {
+    "mtime": 1794181610.392819,
+    "hash": "3ab4170ae97e528a801fe354777a8aba"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/backend/macos.rs": {
+    "mtime": 1794181419.0454886,
+    "hash": "f4ce414bbc8a6287e12c53adfd92fe0b"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/backend/mod.rs": {
+    "mtime": 1794181850.6289935,
+    "hash": "4fbdce9645ca8d86777faf2dff55f5e2"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/backend/mock.rs": {
+    "mtime": 1794181325.9910388,
+    "hash": "748fc54e0c843d58bbb08dbec630e98e"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/backend/windows.rs": {
+    "mtime": 1794181927.2358136,
+    "hash": "bd1da380eb23183bf0e0491e5460e268"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/src/backend/linux.rs": {
+    "mtime": 1794181862.9226773,
+    "hash": "b5ed12a68a7303b86a91a6dd224ba816"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/CHANGELOG.md": {
+    "mtime": 1794214561.1299205,
+    "hash": "3225215748035c23d855e30a2ebdac2d"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/README.md": {
+    "mtime": 1794214553.8424525,
+    "hash": "06b79203c4eb60a275573a4bcf657a59"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/PLAN.md": {
+    "mtime": 1794183902.0911481,
+    "hash": "8aa9a8430c7a91f69770e0df99e42c09"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/packaging/windows/README.txt": {
+    "mtime": 1794179865.6431222,
+    "hash": "8c7e0f68f4aa752e391036fa71cbad2c"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/docs/INSTALL.md": {
+    "mtime": 1794214553.842733,
+    "hash": "afaf5786e3f3a296687e88e441dcd5c1"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/docs/recordings.png": {
+    "mtime": 1794179544.2862763,
+    "hash": "0edd585f31216d0a73954a55816bb72a"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/docs/screenshot.png": {
+    "mtime": 1794182055.4612215,
+    "hash": "e700805dd4a8713af24d941b06739552"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/docs/splash.png": {
+    "mtime": 1794179780.4231129,
+    "hash": "7ff880d18be309656c9530f775dedd1b"
+  },
+  "/Users/johanbjoerk/Documents/programmering/repos/audioInterface/assets/icon.png": {
+    "mtime": 1794179690.0946589,
+    "hash": "448ab2496b13d6d2bdea60a18f566f54"
+  }
+}

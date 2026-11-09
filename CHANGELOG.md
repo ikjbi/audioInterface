@@ -5,6 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **Quiet mics are visible and analysable** (reported with an analog construction headset on a
+  laptop headset jack, whose voice sat around -60 dBFS):
+  - meters, history and spectrum auto-scale down to 10 dB below each device's own noise floor;
+  - speech detection (the live "typical" level and recording analysis) is relative to the noise
+    floor instead of a fixed -55 dBFS, so a quiet mic no longer reads as "no speech";
+  - a weak-signal warning when your speaking level is below -50 dBFS, with a button to open the
+    sound settings (Windows: Recording tab, for Levels and Microphone Boost);
+  - recording reports flag a very weak speaking level as a likely reason colleagues can't hear you.
+
 ### Changed
 - Release files include the version in their name, e.g. `audio-interface-0.1.2-windows-x86_64.zip`.
   The README links to the latest release page instead of fixed file names.

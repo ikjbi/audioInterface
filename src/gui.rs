@@ -819,7 +819,10 @@ impl App {
         let key = d.key();
         let native = self.view.native_metered.contains(&key);
         let user_monitored = self.view.monitored.contains(&key);
-        let floor = self.settings.meter_floor_db;
+        // Auto-range: extend the scale below the device's noise floor so quiet mics
+        // (e.g. analog headsets on a laptop jack) still move the meters visibly.
+        let noise = self.history.get(&key).and_then(|h| h.noise_floor());
+        let floor = crate::levels::display_floor(self.settings.meter_floor_db, noise);
 
         let mut want_help = false;
         if let Some(m) = self.meters.get(&key) {
@@ -875,7 +878,7 @@ impl App {
                 ui.horizontal(|ui| {
                     let w = (ui.available_width() - 150.0).max(60.0);
                     draw_history(ui, h, floor, Vec2::new(w, 36.0));
-                    let gate = floor.max(-60.0) + 10.0;
+                    let gate = crate::levels::speech_gate(h.noise_floor());
                     let typical = h.typical_level(gate);
                     let mut stats = match typical {
                         Some(db) => format!("typical {db:.0} dB"),
@@ -908,6 +911,40 @@ impl App {
                          RMS while there is sound, ignoring pauses. If it slowly drops, something is lowering your gain.",
                     );
                 });
+                if floor < self.settings.meter_floor_db {
+                    ui.label(
+                        RichText::new(format!("Meters auto-scaled to {floor:.0} dB for this quiet device."))
+                            .small()
+                            .color(MUTED_TEXT),
+                    );
+                }
+                if let Some(t) = h.typical_level(crate::levels::speech_gate(h.noise_floor()))
+                    && t < crate::levels::WEAK_SPEECH_DB
+                {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            RichText::new(format!(
+                                "⚠ Weak mic signal: your voice reaches the computer at about {t:.0} dB (clear speech is \
+                                 -40 to -15). Colleagues may hear you quietly. Raise the gain, turn on Microphone Boost, \
+                                 or move the mic closer."
+                            ))
+                            .small()
+                            .color(YELLOW),
+                        );
+                        if (cfg!(windows) || cfg!(target_os = "macos"))
+                            && ui
+                                .small_button("Open sound settings")
+                                .on_hover_text(if cfg!(windows) {
+                                    "Opens the Recording tab: select the mic → Properties → Levels → Microphone Boost"
+                                } else {
+                                    "Opens Sound settings → Input"
+                                })
+                                .clicked()
+                        {
+                            open_sound_input_settings();
+                        }
+                    });
+                }
             }
             if !native {
                 match m.status {
@@ -1515,6 +1552,21 @@ fn draw_history(ui: &mut egui::Ui, h: &LevelHistory, floor_db: f32, size: Vec2) 
         painter.rect_filled(peak_rect, 0.0, color.gamma_multiply(0.35));
         let rms_rect = egui::Rect::from_min_max(egui::pos2(x0, y_at(rms)), egui::pos2(x1, rect.bottom()));
         painter.rect_filled(rms_rect, 0.0, color.gamma_multiply(0.9));
+    }
+}
+
+/// Open the OS sound settings for inputs (Windows: the classic Recording tab,
+/// which has Levels and Microphone Boost).
+fn open_sound_input_settings() {
+    let result = if cfg!(windows) {
+        std::process::Command::new("control").args(["mmsys.cpl,,1"]).spawn()
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg("x-apple.systempreferences:com.apple.Sound-Settings.extension").spawn()
+    } else {
+        return;
+    };
+    if let Err(e) = result {
+        log::warn!("could not open sound settings: {e}");
     }
 }
 

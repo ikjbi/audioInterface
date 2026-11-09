@@ -124,8 +124,12 @@ pub struct Report {
 /// Tuning knobs (defaults suit speech in calls).
 #[derive(Clone, Debug)]
 pub struct Params {
-    /// Seconds whose RMS is above this are "sound" (dBFS).
+    /// Seconds whose RMS is above this are "sound" (dBFS). Ignored when
+    /// `auto_gate` is set.
     pub gate_db: f32,
+    /// Derive the gate from the session's own noise floor (see
+    /// [`crate::levels::speech_gate`]), so quiet mics are analysed too.
+    pub auto_gate: bool,
     /// Sliding window length, seconds.
     pub window_s: usize,
     /// Step between windows, seconds.
@@ -148,6 +152,7 @@ impl Default for Params {
     fn default() -> Self {
         Params {
             gate_db: -55.0,
+            auto_gate: true,
             window_s: 60,
             step_s: 10,
             min_active_s: 8,
@@ -169,12 +174,37 @@ fn median(v: &mut [f32]) -> Option<f32> {
     Some(if n % 2 == 1 { v[n / 2] } else { (v[n / 2 - 1] + v[n / 2]) / 2.0 })
 }
 
+/// Noise floor of a session: the 10th percentile of per-second RMS while the
+/// signal is OK and not muted.
+pub fn noise_floor(samples: &[Sample]) -> Option<f32> {
+    let mut v: Vec<f32> = samples
+        .iter()
+        .filter(|s| s.status == "ok" && s.muted != Some(true) && s.rms_db > crate::levels::FLOOR_DB)
+        .map(|s| s.rms_db)
+        .collect();
+    if v.len() < 10 {
+        return None;
+    }
+    v.sort_by(|a, b| a.total_cmp(b));
+    Some(v[v.len() / 10])
+}
+
+/// Params with the gate resolved for this session.
+fn effective(samples: &[Sample], p: &Params) -> Params {
+    let mut p = p.clone();
+    if p.auto_gate {
+        p.gate_db = crate::levels::speech_gate(noise_floor(samples));
+    }
+    p
+}
+
 fn is_sound(s: &Sample, p: &Params) -> bool {
     s.rms_db > p.gate_db && s.status == "ok" && s.muted != Some(true)
 }
 
 /// Speaking level per sliding window: (centre t, median RMS of sound seconds).
 pub fn speaking_level(samples: &[Sample], p: &Params) -> Vec<(f64, f32)> {
+    let p = &effective(samples, p);
     let mut out = Vec::new();
     if samples.is_empty() {
         return out;
@@ -200,6 +230,7 @@ pub fn analyze(samples: &[Sample]) -> Report {
 }
 
 pub fn analyze_with(samples: &[Sample], p: &Params) -> Report {
+    let p = &effective(samples, p);
     let mut findings = Vec::new();
     let duration_s = samples.last().map(|s| s.t).unwrap_or(0.0);
 
@@ -401,6 +432,17 @@ fn verdict(findings: &[Finding], baseline: Option<f32>, duration: f64, no_speech
     } else if let Some(b) = baseline {
         parts.push(format!("Your speaking level at the start was about {b:.0} dBFS."));
     }
+    if let Some(b) = baseline
+        && !no_speech
+        && b < crate::levels::WEAK_SPEECH_DB
+    {
+        parts.push(format!(
+            "Your voice reaches the computer very weakly (about {b:.0} dBFS; clear speech is usually -40 to -15). \
+             Colleagues may hear you quietly, or noise suppression may cut you off. Raise the input gain, turn on \
+             Microphone Boost (Windows: Sound settings → the mic → Properties → Levels), or move the mic closer \
+             to your mouth."
+        ));
+    }
     if drops.is_empty() {
         if !no_speech {
             parts.push("It did not drop significantly during the session.".into());
@@ -590,6 +632,22 @@ mod tests {
         assert!(r.findings.iter().any(|f| matches!(f, Finding::AppUse { started: false, .. })));
         assert!(r.verdict.contains("restoring the mic level it had before the call"), "{}", r.verdict);
         assert!(!r.verdict.contains("lowered 1 time"), "explained changes are not counted: {}", r.verdict);
+    }
+
+    #[test]
+    fn quiet_analog_headset_is_still_analysed_and_flagged_weak() {
+        // Speech around -60 dBFS over a -80 noise floor: invisible to a fixed -55 gate.
+        let mut s = call(5, |_| -60.0, |_| 34.0);
+        for x in s.iter_mut() {
+            if x.rms_db < -65.0 {
+                x.rms_db = -80.0;
+            }
+        }
+        let r = analyze(&s);
+        assert!((r.baseline_db.unwrap() - -60.0).abs() < 0.5, "{:?}", r.baseline_db);
+        assert!(r.verdict.contains("very weakly"), "{}", r.verdict);
+        // A normal-level call is not flagged.
+        assert!(!analyze(&call(5, |_| -30.0, |_| 80.0)).verdict.contains("very weakly"));
     }
 
     #[test]
