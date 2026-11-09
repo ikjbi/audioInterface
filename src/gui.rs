@@ -857,9 +857,6 @@ impl App {
                         }
                     }
                 }
-                if user_monitored && ui.small_button("■").on_hover_text("Stop metering").clicked() {
-                    self.service.send(Request::SetMonitored(key.clone(), false));
-                }
             });
             if let (Some(win), true) = (self.view.windows.get(&key).cloned(), self.spectra.contains_key(&key)) {
                 let samples = win.latest(crate::spectrum::FFT_SIZE);
@@ -880,27 +877,25 @@ impl App {
                     draw_history(ui, h, floor, Vec2::new(w, 36.0));
                     let gate = crate::levels::speech_gate(h.noise_floor());
                     let typical = h.typical_level(gate);
-                    let mut stats = match typical {
-                        Some(db) => format!("typical {db:.0} dB"),
-                        None => "last 30 s".to_string(),
+                    // Always four lines, so the card never changes height as values come and go.
+                    let dash = "–".to_string();
+                    let l1 = typical.map(|db| format!("typical {db:.0} dB")).unwrap_or_else(|| format!("typical {dash}"));
+                    let l2 = match (h.noise_floor(), h.snr(gate)) {
+                        (Some(n), Some(snr)) => format!("noise {n:.0} dB · SNR {snr:.0}"),
+                        (Some(n), None) => format!("noise {n:.0} dB"),
+                        _ => format!("noise {dash}"),
                     };
-                    if let Some(n) = h.noise_floor() {
-                        stats += &format!("\nnoise {n:.0} dB");
-                    }
-                    if let Some(snr) = h.snr(gate) {
-                        stats += &format!(" · SNR {snr:.0}");
-                    }
-                    if let Some(l) = self.loudness.get(&key) {
-                        let now = Instant::now();
-                        if let (Some(mo), Some(st)) = (l.momentary(now), l.short_term(now))
-                            && st > crate::levels::FLOOR_DB
-                        {
-                            stats += &format!("\nM {mo:.0} · S {st:.0} LUFS");
-                        }
-                    }
-                    if m.clip_count > 0 {
-                        stats += &format!("\nclips {}", m.clip_count);
-                    }
+                    let l3 = self
+                        .loudness
+                        .get(&key)
+                        .and_then(|l| {
+                            let now = Instant::now();
+                            let (mo, st) = (l.momentary(now)?, l.short_term(now)?);
+                            (st > crate::levels::FLOOR_DB).then(|| format!("M {mo:.0} · S {st:.0} LUFS"))
+                        })
+                        .unwrap_or_else(|| format!("LUFS {dash}"));
+                    let l4 = format!("clips {}", m.clip_count);
+                    let stats = format!("{l1}\n{l2}\n{l3}\n{l4}");
                     ui.label(
                         RichText::new(stats)
                         .small()
@@ -911,64 +906,65 @@ impl App {
                          RMS while there is sound, ignoring pauses. If it slowly drops, something is lowering your gain.",
                     );
                 });
-                if floor < self.settings.meter_floor_db {
-                    ui.label(
-                        RichText::new(format!("Meters auto-scaled to {floor:.0} dB for this quiet device."))
-                            .small()
-                            .color(MUTED_TEXT),
-                    );
-                }
-                if let Some(t) = h.typical_level(crate::levels::speech_gate(h.noise_floor()))
-                    && t < crate::levels::WEAK_SPEECH_DB
+            }
+            // One status line with a fixed height (most important message first),
+            // so warnings appearing and disappearing never resize the card.
+            let typical = self
+                .history
+                .get(&key)
+                .filter(|_| d.direction == Direction::Input)
+                .and_then(|h| h.typical_level(crate::levels::speech_gate(h.noise_floor())));
+            let weak = typical.filter(|t| *t < crate::levels::WEAK_SPEECH_DB);
+            let (text, color, sound_button) = if !native && m.status == SignalStatus::Lost {
+                ("⚠ Signal lost: no audio is arriving from this device.".to_string(), RED, false)
+            } else if !native && m.status == SignalStatus::Silent {
+                ("⚠ Digital silence: the device delivers only zeros (muted in hardware?).".to_string(), YELLOW, false)
+            } else if m.max_db > -0.1 {
+                ("⚠ Clipping: the signal hit 0 dBFS. Consider lowering the gain.".to_string(), RED, false)
+            } else if let Some(t) = weak {
+                (
+                    format!(
+                        "⚠ Weak mic signal: your voice reaches the computer at about {t:.0} dB (clear speech is -40 to \
+                         -15). Colleagues may hear you quietly. Raise the gain, turn on Microphone Boost, or move the \
+                         mic closer."
+                    ),
+                    YELLOW,
+                    cfg!(windows) || cfg!(target_os = "macos"),
+                )
+            } else if floor < self.settings.meter_floor_db {
+                (format!("Meters auto-scaled to {floor:.0} dB for this quiet device."), MUTED_TEXT, false)
+            } else {
+                (String::new(), MUTED_TEXT, false)
+            };
+            let recording = self.view.recordings.iter().any(|r| r.info.key == key);
+            let mut hide = false;
+            ui.horizontal(|ui| {
+                ui.set_min_height(18.0);
+                if !native
+                    && !recording
+                    && ui.small_button("■ Hide level").on_hover_text("Stop metering this device").clicked()
                 {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            RichText::new(format!(
-                                "⚠ Weak mic signal: your voice reaches the computer at about {t:.0} dB (clear speech is \
-                                 -40 to -15). Colleagues may hear you quietly. Raise the gain, turn on Microphone Boost, \
-                                 or move the mic closer."
-                            ))
-                            .small()
-                            .color(YELLOW),
-                        );
-                        if (cfg!(windows) || cfg!(target_os = "macos"))
-                            && ui
-                                .small_button("Open sound settings")
-                                .on_hover_text(if cfg!(windows) {
-                                    "Opens the Recording tab: select the mic → Properties → Levels → Microphone Boost"
-                                } else {
-                                    "Opens Sound settings → Input"
-                                })
-                                .clicked()
-                        {
-                            open_sound_input_settings();
-                        }
-                    });
+                    hide = true;
                 }
-            }
-            if !native {
-                match m.status {
-                    SignalStatus::Lost => {
-                        ui.label(
-                            RichText::new("⚠ Signal lost: no audio is arriving from this device.").small().color(RED),
-                        );
-                    }
-                    SignalStatus::Silent => {
-                        ui.label(
-                            RichText::new(
-                                "⚠ Digital silence: the device is delivering only zeros (muted in hardware?).",
-                            )
-                            .small()
-                            .color(YELLOW),
-                        );
-                    }
-                    _ => {}
+                if sound_button
+                    && ui
+                        .small_button("Open sound settings")
+                        .on_hover_text(if cfg!(windows) {
+                            "Opens the Recording tab: select the mic → Properties → Levels → Microphone Boost"
+                        } else {
+                            "Opens Sound settings → Input"
+                        })
+                        .clicked()
+                {
+                    open_sound_input_settings();
                 }
-            }
-            if m.max_db > -0.1 {
-                ui.label(
-                    RichText::new("⚠ Clipping: the signal hit 0 dBFS. Consider lowering the gain.").small().color(RED),
-                );
+                if !text.is_empty() {
+                    ui.add(egui::Label::new(RichText::new(&text).small().color(color)).truncate()).on_hover_text(&text);
+                }
+            });
+            if hide {
+                self.service.send(Request::SetMonitored(key.clone(), false));
+                self.spectra.remove(&key);
             }
         } else if let Some(err) = self.view.meter_errors.get(&key) {
             ui.horizontal_wrapped(|ui| {

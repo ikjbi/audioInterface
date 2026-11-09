@@ -194,6 +194,8 @@ struct Worker {
     switcher: AutoSwitcher,
     locker: GainLocker,
     monitored: BTreeSet<DeviceKey>,
+    /// Devices whose automatic meter the user hid this session.
+    hidden_meters: BTreeSet<DeviceKey>,
     devices: Vec<Device>,
     have_listed: bool,
     recorders: HashMap<DeviceKey, SessionRecorder>,
@@ -226,6 +228,7 @@ impl Worker {
             switcher: AutoSwitcher::default(),
             locker: GainLocker::default(),
             monitored: BTreeSet::new(),
+            hidden_meters: BTreeSet::new(),
             devices: Vec::new(),
             have_listed: false,
             recorders: HashMap::new(),
@@ -347,10 +350,14 @@ impl Worker {
             }
             Request::SetMonitored(key, on) => {
                 if on {
+                    self.hidden_meters.remove(&key);
                     self.monitored.insert(key);
                 } else {
+                    // Also hides the automatic default-input meter (until shown again).
                     self.monitored.remove(&key);
+                    self.hidden_meters.insert(key);
                 }
+                self.sync_meters();
                 return;
             }
             Request::ToggleDefaultMute(dir) => {
@@ -700,7 +707,8 @@ impl Worker {
             let auto = d.direction == Direction::Input
                 && d.is_default
                 && self.settings.monitor_default_input
-                && (d.transport != Transport::Bluetooth || self.settings.monitor_bluetooth_inputs);
+                && (d.transport != Transport::Bluetooth || self.settings.monitor_bluetooth_inputs)
+                && !self.hidden_meters.contains(&key);
             if (auto || self.monitored.contains(&key) || self.recorders.contains_key(&key))
                 && let Some(cap) = backend.capture_id(&d.id, d.direction)
             {

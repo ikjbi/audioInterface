@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-09
+
+### Fixed
+- **Input cards no longer flicker in size** while levels change. The level stats always use four
+  lines, and all warnings share one fixed-height status line (full text on hover).
+- **"■ Hide level"** on every live meter. Previously only meters you'd started yourself could be
+  stopped, so the default input's meter could never be hidden. Press "▶ Show level" to bring it back.
+
 ### Added
 - **Quiet mics are visible and analysable** (reported with an analog construction headset on a
   laptop headset jack, whose voice sat around -60 dBFS):
