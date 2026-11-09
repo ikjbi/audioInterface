@@ -1,0 +1,28 @@
+name: Linux audio debug
+
+# Manually triggered: build on Linux, start PulseAudio with virtual devices
+# and run scripts/ci-debug.sh. Used to investigate audio behaviour quickly
+# without the full CI matrix.
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libxkbcommon-dev \
+            libwayland-dev libx11-dev pulseaudio pulseaudio-utils
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked
+      - name: Start PulseAudio with virtual devices
+        run: |
+          pulseaudio --start --exit-idle-time=-1 --log-target=stderr
+          sleep 1
+          pactl load-module module-null-sink sink_name=ci_speakers sink_properties=device.description=CI_Speakers
+          pactl load-module module-null-sink sink_name=ci_headphones sink_properties=device.description=CI_Headphones
+          pactl load-module module-sine-source source_name=ci_sine_mic rate=48000 frequency=440
+      - run: bash scripts/ci-debug.sh target/debug/audio-interface
